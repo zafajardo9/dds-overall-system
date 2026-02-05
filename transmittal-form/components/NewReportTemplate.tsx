@@ -1,21 +1,22 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { AppData, TransmittalItem, Signatories, ReceivedBy, FooterNotes } from '../types';
+import { REMARKS_OPTIONS } from '../services/dropdown';
 
 interface Props {
-  data: AppData;
-  onUpdateItem: (index: number, field: keyof TransmittalItem, value: string) => void;
-  onRemoveItem: (index: number) => void;
-  onMoveItem: (index: number, direction: 'up' | 'down') => void;
-  onReorderItems: (fromIndex: number, toIndex: number) => void;
-  onAddItem: () => void;
-  onBulkAdd: () => void;
-  onUpdateSignatory?: (field: keyof Signatories, value: string) => void;
-  onUpdateReceivedBy?: (field: keyof ReceivedBy, value: string) => void;
-  onUpdateFooter?: (field: keyof FooterNotes, value: string) => void;
-  onUpdateNotes?: (value: string) => void;
-  isGeneratingPdf?: boolean;
-  columnWidths: { qty: number; noOfItems: number; documentNumber: number; remarks: number; };
-  onColumnResize: (field: keyof Props['columnWidths'], newWidth: number) => void;
+    data: AppData;
+    onUpdateItem: (index: number, field: keyof TransmittalItem, value: string) => void;
+    onRemoveItem: (index: number) => void;
+    onMoveItem: (index: number, direction: 'up' | 'down') => void;
+    onReorderItems: (fromIndex: number, toIndex: number) => void;
+    onAddItem: () => void;
+    onBulkAdd: () => void;
+    onUpdateSignatory?: (field: keyof Signatories, value: string) => void;
+    onUpdateReceivedBy?: (field: keyof ReceivedBy, value: string) => void;
+    onUpdateFooter?: (field: keyof FooterNotes, value: string) => void;
+    onUpdateNotes?: (value: string) => void;
+    isGeneratingPdf?: boolean;
+    columnWidths: { qty: number; noOfItems: number; documentNumber: number; remarks: number; };
+    onColumnResize: (field: keyof Props['columnWidths'], newWidth: number) => void;
 }
 
 const AutoResizeTextArea = ({ value, onChange, className = "", align = "left" }: { value: string, onChange?: (val: string) => void, className?: string, align?: "left" | "center" | "right" }) => {
@@ -39,6 +40,60 @@ const AutoResizeTextArea = ({ value, onChange, className = "", align = "left" }:
             className={`w-full bg-transparent outline-none font-medium placeholder-slate-400 resize-none overflow-hidden ${className}`}
             style={{ textAlign: align }}
         />
+    );
+};
+
+const ComboBox = ({ value, onChange, options, className = "" }: { value: string, onChange?: (val: string) => void, options: string[], className?: string }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    if (!onChange) {
+        return <span className={`block whitespace-pre-wrap break-words ${className}`}>{value}</span>;
+    }
+
+    return (
+        <div className="relative w-full" ref={containerRef}>
+            <AutoResizeTextArea
+                value={value}
+                onChange={onChange}
+                className={`${className} pr-6`}
+            />
+            <button
+                className="absolute right-0 top-0 text-slate-400 hover:text-slate-600 p-1"
+                onClick={() => setIsOpen(!isOpen)}
+                tabIndex={-1}
+            >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                </svg>
+            </button>
+            {isOpen && (
+                <div className="absolute left-0 top-full mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg z-[100] max-h-40 overflow-y-auto">
+                    {options.map((option) => (
+                        <div
+                            key={option}
+                            className="px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer"
+                            onClick={() => {
+                                onChange(option);
+                                setIsOpen(false);
+                            }}
+                        >
+                            {option}
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
     );
 };
 
@@ -68,8 +123,8 @@ const ResizableHeader = ({ width, label, onResize, minWidth = 30, className }: {
     );
 };
 
-export const TransmittalTemplate: React.FC<Props> = ({ 
-    data, onUpdateItem, onRemoveItem, onMoveItem, onReorderItems, onAddItem, onBulkAdd, onUpdateSignatory, onUpdateReceivedBy, onUpdateFooter, onUpdateNotes, isGeneratingPdf = false, columnWidths, onColumnResize 
+export const TransmittalTemplate: React.FC<Props> = ({
+    data, onUpdateItem, onRemoveItem, onMoveItem, onReorderItems, onAddItem, onBulkAdd, onUpdateSignatory, onUpdateReceivedBy, onUpdateFooter, onUpdateNotes, isGeneratingPdf = false, columnWidths, onColumnResize
 }) => {
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -83,21 +138,21 @@ export const TransmittalTemplate: React.FC<Props> = ({
         }, 0);
     };
     const handleDragOver = (e: React.DragEvent, index: number) => { e.preventDefault(); if (draggedIndex === null) return; if (dragOverIndex !== index) setDragOverIndex(index); };
-    const handleDragEnd = (e: React.DragEvent) => { 
-        setDraggedIndex(null); 
+    const handleDragEnd = (e: React.DragEvent) => {
+        setDraggedIndex(null);
         setDragOverIndex(null);
         (e.target as HTMLElement).classList.remove('drag-row-active');
     };
     const handleDrop = (e: React.DragEvent, targetIndex: number) => {
         e.preventDefault();
         if (draggedIndex !== null && draggedIndex !== targetIndex) onReorderItems(draggedIndex, targetIndex);
-        setDraggedIndex(null); 
+        setDraggedIndex(null);
         setDragOverIndex(null);
     };
 
-    const containerClass = isGeneratingPdf 
-      ? "bg-white text-slate-800 w-full font-sans relative" 
-      : "bg-white text-slate-800 w-full max-w-[8.5in] mx-auto shadow-2xl font-sans relative min-h-[11in]";
+    const containerClass = isGeneratingPdf
+        ? "bg-white text-slate-800 w-full font-sans relative"
+        : "bg-white text-slate-800 w-full max-w-[8.5in] mx-auto shadow-2xl font-sans relative min-h-[11in]";
 
     const cellClass = "border border-slate-300 px-2 py-2 align-top text-sm break-words relative transition-all duration-200";
     const headerCellClass = "border border-slate-300 bg-slate-50 px-1 py-2 font-bold text-center text-sm uppercase text-slate-700 align-middle select-none";
@@ -170,7 +225,7 @@ export const TransmittalTemplate: React.FC<Props> = ({
                 <thead className="h-[1.5in]">
                     <tr>
                         <td colSpan={100} className="align-top p-0 border-none">
-                             <div className="flex justify-between items-start pt-6 px-10 h-[1.5in] box-border overflow-hidden w-full">
+                            <div className="flex justify-between items-start pt-6 px-10 h-[1.5in] box-border overflow-hidden w-full">
                                 <div className="w-1/3">
                                     {data.sender.logoBase64 ? (
                                         <img src={data.sender.logoBase64} alt="Logo" className="h-20 object-contain object-left" />
@@ -194,7 +249,7 @@ export const TransmittalTemplate: React.FC<Props> = ({
                 <tfoot className="h-[0.5in]">
                     <tr>
                         <td colSpan={100} className="align-bottom p-0 border-none">
-                             <div className="h-[0.5in] w-full"></div>
+                            <div className="h-[0.5in] w-full"></div>
                         </td>
                     </tr>
                 </tfoot>
@@ -253,7 +308,7 @@ export const TransmittalTemplate: React.FC<Props> = ({
                                                     <td className={cellClass}><AutoResizeTextArea value={item.qty} onChange={isGeneratingPdf ? undefined : (v) => onUpdateItem(index, 'qty', v)} className="text-center text-slate-800" align="center" /></td>
                                                     <td className={cellClass}><AutoResizeTextArea value={item.documentNumber} onChange={isGeneratingPdf ? undefined : (v) => onUpdateItem(index, 'documentNumber', v)} className="text-slate-800" /></td>
                                                     <td className={cellClass}><AutoResizeTextArea value={item.description} onChange={isGeneratingPdf ? undefined : (v) => onUpdateItem(index, 'description', v)} className="text-slate-800" /></td>
-                                                    <td className={cellClass}><AutoResizeTextArea value={item.remarks} onChange={isGeneratingPdf ? undefined : (v) => onUpdateItem(index, 'remarks', v)} className="text-slate-800" /></td>
+                                                    <td className={cellClass}><ComboBox value={item.remarks} onChange={isGeneratingPdf ? undefined : (v) => onUpdateItem(index, 'remarks', v)} options={REMARKS_OPTIONS} className="text-slate-800" /></td>
                                                     {!isGeneratingPdf && (
                                                         <td className="border border-slate-300 p-1 text-center print:hidden align-middle">
                                                             <div className="flex flex-col gap-1.5 items-center justify-center">
@@ -268,7 +323,7 @@ export const TransmittalTemplate: React.FC<Props> = ({
                                     </tbody>
                                 </table>
                             </div>
-                            
+
                             {!isGeneratingPdf && (
                                 <div className="w-full flex justify-center gap-4 mb-6">
                                     <button onClick={onAddItem} className="group flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded-full shadow-sm hover:border-brand-400 hover:text-brand-600 hover:shadow-md transition-all text-xs font-bold text-slate-500 uppercase tracking-wide"><span className="w-5 h-5 flex items-center justify-center bg-slate-100 rounded-full group-hover:bg-brand-100 transition-colors text-lg leading-none pb-0.5">+</span>Add Row</button>
@@ -304,7 +359,7 @@ export const TransmittalTemplate: React.FC<Props> = ({
                                             <div className="flex items-center gap-2"><div className="w-4 h-4 border border-slate-400 flex items-center justify-center bg-white rounded-[2px] relative">{data.transmissionMethod.registeredMail && <div className="absolute w-2.5 h-2.5 bg-slate-800 rounded-[1px]"></div>}</div><span>Registered Mail</span></div>
                                         </div>
                                     </div>
-                                    
+
                                     {data.notes && (
                                         <div className="mb-6 avoid-break">
                                             <p className="text-[10px] font-bold text-slate-700 uppercase tracking-widest mb-1">Notes / Instructions:</p>

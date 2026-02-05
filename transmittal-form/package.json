@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "db:sync": "prisma db push && prisma generate",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma db push --force-reset && prisma generate"
   },
   "dependencies": {
     "@google/genai": "^1.31.0",

@@ -972,15 +972,15 @@ const AppContent: React.FC = () => {
       },
       items: Array.isArray(transmittal.items)
         ? transmittal.items.map((item: any) => ({
-            id: item.id,
-            qty: item.qty || "",
-            noOfItems: item.noOfItems || "",
-            documentNumber: item.documentNumber || "",
-            description: item.description || "",
-            remarks: item.remarks || "",
-            fileType: item.fileType || undefined,
-            fileSource: item.fileSource || undefined,
-          }))
+          id: item.id,
+          qty: item.qty || "",
+          noOfItems: item.noOfItems || "",
+          documentNumber: item.documentNumber || "",
+          description: item.description || "",
+          remarks: item.remarks || "",
+          fileType: item.fileType || undefined,
+          fileSource: item.fileSource || undefined,
+        }))
         : [],
       sender: {
         agencyName: senderData.agencyName || "",
@@ -2495,13 +2495,13 @@ const AppContent: React.FC = () => {
 
       <div
         ref={previewContainerRef}
-        className={`${showPreview ? "flex" : "hidden"} lg:flex flex-1 h-full overflow-hidden bg-slate-200 p-4 lg:p-8 justify-center custom-scrollbar w-full absolute inset-0 lg:static z-10 flex-col items-center`}
+        className={`${showPreview ? "flex" : "hidden"} lg:flex flex-1 h-full overflow-y-auto overflow-x-hidden bg-slate-200 p-4 lg:p-8 justify-start custom-scrollbar w-full absolute inset-0 lg:static z-10 flex-col items-center`}
       >
         <div
-          className="transition-all duration-300 ease-out origin-top shadow-[0_40px_100px_rgba(0,0,0,0.15)] rounded-sm"
-          style={{ transform: `scale(${previewScale})` }}
+          className="transition-all duration-300 ease-out origin-top shadow-[0_40px_100px_rgba(0,0,0,0.15)] rounded-sm shrink-0"
+          style={{ transform: `scale(${previewScale})`, width: '816px', marginBottom: '200px' }}
         >
-          <div id="print-container" className="bg-white">
+          <div id="print-container" className="bg-white min-h-[1056px]">
             <TransmittalTemplate
               data={data}
               onUpdateItem={updateItem}
