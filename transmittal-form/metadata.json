@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Smart Transmittal Gen v2",
+  "description": "An intelligent system to parse reports and generate new transmittal templates using Gemini 2.5.",
+  "requestFramePermissions": []
+}
