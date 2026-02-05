@@ -96,8 +96,7 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
             if (imageBytes.length > 0) {
                 logoRun = new ImageRun({
                     data: imageBytes,
-                    transformation: { width: 150, height: 60 },
-                    type: "jpg"
+                    transformation: { width: 150, height: 60 }
                 });
             }
         } catch(e) { console.warn("Logo add failed", e); }
@@ -167,7 +166,19 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
         const cells = [];
         if (left) {
             cells.push(new TableCell({
-                children: [new Paragraph({ text: left.label, bold: true, size: SIZE_LABEL, color: COLOR_TEXT_SECONDARY, font: FONT_FAMILY })],
+                children: [
+                    new Paragraph({
+                        children: [
+                            new TextRun({
+                                text: left.label,
+                                bold: true,
+                                size: SIZE_LABEL,
+                                color: COLOR_TEXT_SECONDARY,
+                                font: FONT_FAMILY,
+                            }),
+                        ],
+                    }),
+                ],
                 shading: { fill: COLOR_BG_HEADER },
                 width: { size: 750, type: WidthType.PERCENTAGE },
                 verticalAlign: VerticalAlign.CENTER,
@@ -175,7 +186,19 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
                 borders: { right: { style: BorderStyle.SINGLE, size: 2, color: COLOR_BORDER } }
             }));
             cells.push(new TableCell({
-                children: [new Paragraph({ text: left.value, size: SIZE_TEXT, color: COLOR_TEXT_PRIMARY, font: FONT_FAMILY, bold: true })],
+                children: [
+                    new Paragraph({
+                        children: [
+                            new TextRun({
+                                text: left.value,
+                                size: SIZE_TEXT,
+                                color: COLOR_TEXT_PRIMARY,
+                                font: FONT_FAMILY,
+                                bold: true,
+                            }),
+                        ],
+                    }),
+                ],
                 width: { size: 1750, type: WidthType.PERCENTAGE },
                 verticalAlign: VerticalAlign.CENTER,
                 margins: cellMargin,
@@ -187,7 +210,19 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
 
         if (right) {
              cells.push(new TableCell({
-                children: [new Paragraph({ text: right.label, bold: true, size: SIZE_LABEL, color: COLOR_TEXT_SECONDARY, font: FONT_FAMILY })],
+                children: [
+                    new Paragraph({
+                        children: [
+                            new TextRun({
+                                text: right.label,
+                                bold: true,
+                                size: SIZE_LABEL,
+                                color: COLOR_TEXT_SECONDARY,
+                                font: FONT_FAMILY,
+                            }),
+                        ],
+                    }),
+                ],
                 shading: { fill: COLOR_BG_HEADER },
                 width: { size: 875, type: WidthType.PERCENTAGE },
                 verticalAlign: VerticalAlign.CENTER,
@@ -195,7 +230,18 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
                 borders: { right: { style: BorderStyle.SINGLE, size: 2, color: COLOR_BORDER } }
             }));
              cells.push(new TableCell({
-                children: [new Paragraph({ text: right.value, size: SIZE_TEXT, color: COLOR_TEXT_PRIMARY, font: FONT_FAMILY })],
+                children: [
+                    new Paragraph({
+                        children: [
+                            new TextRun({
+                                text: right.value,
+                                size: SIZE_TEXT,
+                                color: COLOR_TEXT_PRIMARY,
+                                font: FONT_FAMILY,
+                            }),
+                        ],
+                    }),
+                ],
                 width: { size: 1625, type: WidthType.PERCENTAGE },
                 verticalAlign: VerticalAlign.CENTER,
                 margins: cellMargin
@@ -243,7 +289,24 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
     if (itemRows.length === 0) {
         itemRows.push(new TableRow({
             children: [
-                new TableCell({ columnSpan: 5, children: [new Paragraph({ text: "No items listed.", alignment: AlignmentType.CENTER, italics: true, color: COLOR_TEXT_MUTED, size: SIZE_TEXT, font: FONT_FAMILY })], margins: { top: 200, bottom: 200, left: 100, right: 100 } })
+                new TableCell({
+                    columnSpan: 5,
+                    children: [
+                        new Paragraph({
+                            children: [
+                                new TextRun({
+                                    text: "No items listed.",
+                                    italics: true,
+                                    color: COLOR_TEXT_MUTED,
+                                    size: SIZE_TEXT,
+                                    font: FONT_FAMILY,
+                                }),
+                            ],
+                            alignment: AlignmentType.CENTER,
+                        }),
+                    ],
+                    margins: { top: 200, bottom: 200, left: 100, right: 100 },
+                })
             ]
         }));
     }
@@ -251,7 +314,6 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
     const itemsTable = new Table({
         width: { size: 5000, type: WidthType.PERCENTAGE },
         rows: [tableHeader, ...itemRows],
-        spacing: { before: 200 },
         borders: {
              top: { style: BorderStyle.SINGLE, size: 2, color: COLOR_BORDER },
              bottom: { style: BorderStyle.SINGLE, size: 2, color: COLOR_BORDER },
@@ -300,7 +362,18 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
                 new TableRow({
                     children: [
                         new TableCell({
-                            children: [new Paragraph({ text: data.notes, size: SIZE_TEXT, font: FONT_FAMILY, color: COLOR_TEXT_PRIMARY })],
+                            children: [
+                                new Paragraph({
+                                    children: [
+                                        new TextRun({
+                                            text: data.notes,
+                                            size: SIZE_TEXT,
+                                            font: FONT_FAMILY,
+                                            color: COLOR_TEXT_PRIMARY,
+                                        }),
+                                    ],
+                                }),
+                            ],
                             margins: { top: 100, bottom: 100, left: 100, right: 100 }
                         })
                     ]
@@ -335,7 +408,6 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
             insideVertical: { style: BorderStyle.NONE },
             insideHorizontal: { style: BorderStyle.NONE }
         },
-        shading: { fill: COLOR_BG_HEADER },
         rows: [
             new TableRow({ children: [createRecvCell("Received by:", data.receivedBy.name), createRecvCell("Date Received:", data.receivedBy.date)] }),
             new TableRow({ children: [createRecvCell("Time Received:", data.receivedBy.time), createRecvCell("Remarks:", data.receivedBy.remarks)] })
@@ -343,12 +415,16 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
     });
 
     const disclaimer = new Paragraph({
-        text: data.footerNotes.disclaimer,
-        italics: true,
+        children: [
+            new TextRun({
+                text: data.footerNotes.disclaimer,
+                italics: true,
+                size: 14,
+                color: COLOR_TEXT_MUTED,
+                font: FONT_FAMILY,
+            }),
+        ],
         alignment: AlignmentType.CENTER,
-        size: 14,
-        color: COLOR_TEXT_MUTED,
-        font: FONT_FAMILY,
         spacing: { before: 200 }
     });
 
@@ -393,7 +469,18 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
                 new Paragraph({ text: "", spacing: { before: 200 } }),
                 transParagraph,
                 ...notesParagraph,
-                new Paragraph({ text: data.footerNotes.acknowledgement, italics: true, size: 16, color: COLOR_TEXT_SECONDARY, font: FONT_FAMILY, spacing: { after: 100, before: 100 } }),
+                new Paragraph({
+                    children: [
+                        new TextRun({
+                            text: data.footerNotes.acknowledgement,
+                            italics: true,
+                            size: 16,
+                            color: COLOR_TEXT_SECONDARY,
+                            font: FONT_FAMILY,
+                        }),
+                    ],
+                    spacing: { after: 100, before: 100 },
+                }),
                 receivedByTable,
                 disclaimer
             ]
@@ -405,7 +492,20 @@ export const generateTransmittalDocx = async (data: AppData): Promise<Blob> => {
 
 function createHeaderCell(text: string, widthPercent: number) {
     return new TableCell({
-        children: [new Paragraph({ text, bold: true, size: SIZE_LABEL, alignment: AlignmentType.CENTER, font: FONT_FAMILY, color: COLOR_TEXT_SECONDARY })],
+        children: [
+            new Paragraph({
+                children: [
+                    new TextRun({
+                        text,
+                        bold: true,
+                        size: SIZE_LABEL,
+                        font: FONT_FAMILY,
+                        color: COLOR_TEXT_SECONDARY,
+                    }),
+                ],
+                alignment: AlignmentType.CENTER,
+            }),
+        ],
         shading: { fill: COLOR_BG_HEADER },
         width: { size: widthPercent * 50, type: WidthType.PERCENTAGE },
         verticalAlign: VerticalAlign.CENTER,
@@ -419,9 +519,27 @@ function createHeaderCell(text: string, widthPercent: number) {
     });
 }
 
-function createItemCell(text: string, widthPercent: number, align: AlignmentType = AlignmentType.LEFT) {
+type AlignmentValue = (typeof AlignmentType)[keyof typeof AlignmentType];
+
+function createItemCell(
+    text: string,
+    widthPercent: number,
+    align: AlignmentValue = AlignmentType.LEFT,
+) {
     return new TableCell({
-        children: [new Paragraph({ text, size: SIZE_TEXT, alignment: align, font: FONT_FAMILY, color: COLOR_TEXT_PRIMARY })],
+        children: [
+            new Paragraph({
+                children: [
+                    new TextRun({
+                        text,
+                        size: SIZE_TEXT,
+                        font: FONT_FAMILY,
+                        color: COLOR_TEXT_PRIMARY,
+                    }),
+                ],
+                alignment: align,
+            }),
+        ],
         width: { size: widthPercent * 50, type: WidthType.PERCENTAGE },
         verticalAlign: VerticalAlign.CENTER,
         margins: { top: 120, bottom: 120, left: 60, right: 60 },

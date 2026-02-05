@@ -1,0 +1,150 @@
+import { NextResponse } from "next/server";
+import { auth, db } from "@/server/auth";
+
+export const runtime = "nodejs";
+
+const stripTransmittalPrefix = (value: string) =>
+  value.startsWith("TR-FP-") ? value.slice("TR-FP-".length) : value;
+
+const ensureDbTransmittalPrefix = (value: string) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("TR-FP-") ? trimmed : `TR-FP-${trimmed}`;
+};
+
+const mapTransmittalForApi = (transmittal: any) => {
+  if (!transmittal) return transmittal;
+  const project = (transmittal.project || {}) as any;
+  const nextProject = {
+    ...project,
+    transmittalNumber: stripTransmittalPrefix(
+      String(project.transmittalNumber || ""),
+    ),
+  };
+  return {
+    ...transmittal,
+    project: nextProject,
+  };
+};
+
+export async function GET(request: Request) {
+  try {
+    const session = await auth.api.getSession({
+      headers: request.headers as any,
+    });
+
+    if (!session?.user) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const transmittals = await db.transmittal.findMany({
+      where: { userId: session.user.id },
+      include: {
+        items: true,
+        recipients: true,
+        agency: true,
+      },
+    });
+
+    return NextResponse.json({
+      transmittals: transmittals.map(mapTransmittalForApi),
+    });
+  } catch (error: any) {
+    console.error("Load transmittals error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const session = await auth.api.getSession({
+      headers: request.headers as any,
+    });
+
+    if (!session?.user) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const data = body?.data;
+    if (!data) {
+      return NextResponse.json(
+        { error: "Missing transmittal data" },
+        { status: 400 },
+      );
+    }
+
+    const project = {
+      ...(data.project || {}),
+      transmittalNumber: ensureDbTransmittalPrefix(data.project?.transmittalNumber),
+    };
+
+    const transmittal = await db.transmittal.create({
+      data: {
+        userId: session.user.id,
+        notes: data.notes || "",
+        handDelivery: Boolean(data.transmissionMethod?.personalDelivery),
+        pickUp: Boolean(data.transmissionMethod?.pickUp),
+        courier: Boolean(data.transmissionMethod?.grabLalamove),
+        registeredMail: Boolean(data.transmissionMethod?.registeredMail),
+        projectName: data.project?.projectName || "",
+        projectNumber: data.project?.projectNumber || null,
+        engagementRefNumber: data.project?.engagementRef || null,
+        projectPurpose: data.project?.purpose || null,
+        project,
+        sender: data.sender || {},
+        receivedBy: data.receivedBy || {},
+        footerNotes: data.footerNotes || {},
+        preparedBy: data.signatories?.preparedBy || "",
+        preparedByRole: data.signatories?.preparedByRole || "",
+        notedBy: data.signatories?.notedBy || "",
+        notedByRole: data.signatories?.notedByRole || "",
+        timeReleased: data.signatories?.timeReleased || "",
+        recipients: {
+          create: [
+            {
+              recipientName: data.recipient?.to || "",
+              recipientOrganization: data.recipient?.company || null,
+              recipientAttention: data.recipient?.attention || null,
+              recipientFullAddress: data.recipient?.address || null,
+              recipientAgencyContactNumber: data.recipient?.contactNumber || null,
+              recipientAgencyEmail: data.recipient?.email || null,
+            },
+          ],
+        },
+        items: {
+          create: Array.isArray(data.items)
+            ? data.items.map((item: any) => ({
+                qty: item.qty || "",
+                noOfItems: item.noOfItems || "",
+                documentNumber: item.documentNumber || "",
+                description: item.description || "",
+                remarks: item.remarks || "",
+                fileType: item.fileType || null,
+                fileSource: item.fileSource || null,
+              }))
+            : [],
+        },
+        agency: {
+          create: {
+            name: data.sender?.agencyName || "",
+            website: data.sender?.website || null,
+            telephoneNumber: data.sender?.telephone || null,
+            contactNumber: data.sender?.mobile || null,
+            email: data.sender?.email || null,
+          },
+        },
+      },
+      include: {
+        items: true,
+        recipients: true,
+        agency: true,
+      },
+    });
+
+    return NextResponse.json({ transmittal: mapTransmittalForApi(transmittal) });
+  } catch (error: any) {
+    console.error("Save transmittal error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}

@@ -593,8 +593,13 @@ const AppContent: React.FC = () => {
     "content" | "sender" | "recipient" | "project" | "signatories" | "history"
   >("content");
   const [history, setHistory] = useState<HistoryItem[]>(() => {
-    const saved = localStorage.getItem("transmittal_history");
-    return saved ? JSON.parse(saved) : [];
+    if (typeof window === "undefined") return [];
+    try {
+      const saved = window.localStorage.getItem("transmittal_history");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
   });
   const [data, setData] = useState<AppData>(() => createInitialData(history));
   const [activeTransmittalId, setActiveTransmittalId] = useState<string | null>(
@@ -633,7 +638,9 @@ const AppContent: React.FC = () => {
   }, [showPreview]); // Re-calculate when preview is shown
 
   const { data: session, isPending } = useSession();
-  const apiBaseUrl = import.meta.env.VITE_BETTER_AUTH_URL;
+  const apiBaseUrl =
+    process.env.NEXT_PUBLIC_BETTER_AUTH_URL ||
+    (typeof window !== "undefined" ? window.location.origin : "");
 
   const handleGoogleSignIn = async () => {
     await signIn.social({
@@ -671,7 +678,15 @@ const AppContent: React.FC = () => {
   }, [session?.user?.id]);
 
   useEffect(() => {
-    localStorage.setItem("transmittal_history", JSON.stringify(history));
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        "transmittal_history",
+        JSON.stringify(history),
+      );
+    } catch {
+      return;
+    }
   }, [history]);
 
   const mapDbTransmittalToAppData = (transmittal: any): AppData => {

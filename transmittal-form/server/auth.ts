@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
+import { nextCookies } from "better-auth/next-js";
 import { PrismaClient } from "@prisma/client";
 import { withAccelerate } from "@prisma/extension-accelerate";
 
@@ -16,12 +17,23 @@ export const prisma = new PrismaClient({
   accelerateUrl: process.env.DATABASE_URL,
 }).$extends(withAccelerate());
 
+const globalForPrisma = globalThis as unknown as {
+  prisma?: typeof prisma;
+};
+
+export const db = globalForPrisma.prisma || prisma;
+
+if (!globalForPrisma.prisma) {
+  globalForPrisma.prisma = db;
+}
+
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   trustedOrigins: parseOrigins(process.env.BETTER_AUTH_TRUSTED_ORIGINS, [
     "http://localhost:3000",
   ]),
-  database: prismaAdapter(prisma, { provider: "postgresql" }),
+  database: prismaAdapter(db, { provider: "postgresql" }),
+  plugins: [nextCookies()],
   account: {
     accountLinking: {
       enabled: true,

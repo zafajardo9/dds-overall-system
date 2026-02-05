@@ -1,6 +1,8 @@
 // Google Drive Service - Uses access token from Better Auth session
 
-const AUTH_SERVER = import.meta.env.VITE_BETTER_AUTH_URL || 'http://localhost:8000';
+const AUTH_SERVER =
+  process.env.NEXT_PUBLIC_BETTER_AUTH_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "");
 
 // Cached access token
 let cachedAccessToken: string | null = null;

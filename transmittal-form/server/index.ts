@@ -8,7 +8,7 @@ import { auth, prisma } from "./auth";
 const app = express();
 const port = Number(process.env.PORT) || 8000;
 const SEND_API_TOKEN = process.env.SEND_API_TOKEN;
-
+s
 const parseOrigins = (value: string | undefined, fallback: string[]) => {
   const items = String(value || "")
     .split(",")
