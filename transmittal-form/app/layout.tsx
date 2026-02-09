@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Script from "next/script";
 import "./globals.css";
 import { Geist } from "next/font/google";
+import { OfflineAlert } from "@/components/OfflineAlert";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -70,6 +71,7 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
           src="https://apis.google.com/js/api.js"
           strategy="afterInteractive"
         />
+        <OfflineAlert />
         {children}
       </body>
     </html>

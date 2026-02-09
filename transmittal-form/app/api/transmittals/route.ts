@@ -88,81 +88,95 @@ export async function POST(request: Request) {
       }
     }
 
-    const rawTransmittalNumber = String(data.project?.transmittalNumber || "").trim();
-    const dbTransmittalNumber = ensureDbTransmittalPrefix(rawTransmittalNumber);
+    const TRANSMITTAL_PREFIX = "TR-FP-";
 
-    if (dbTransmittalNumber) {
-      const duplicate = await db.transmittal.findFirst({
-        where: { transmittalNumber: dbTransmittalNumber },
-        select: { id: true },
+    // Generate the transmittal number atomically inside a transaction
+    // to prevent duplicate numbers from race conditions
+    const transmittal = await db.$transaction(async (tx) => {
+      const now = new Date();
+      const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const prefix = `${TRANSMITTAL_PREFIX}${yearMonth}-`;
+
+      const existing = await tx.transmittal.findMany({
+        where: {
+          transmittalNumber: { startsWith: prefix },
+        },
+        select: { transmittalNumber: true },
       });
-      if (duplicate) {
-        return NextResponse.json(
-          { error: `Transmittal number "${rawTransmittalNumber}" is already in use.` },
-          { status: 409 },
-        );
+
+      let maxSeq = 0;
+      for (const row of existing) {
+        if (!row.transmittalNumber) continue;
+        const suffix = row.transmittalNumber.slice(prefix.length);
+        const num = Number(suffix);
+        if (!Number.isNaN(num) && num > maxSeq) {
+          maxSeq = num;
+        }
       }
-    }
 
-    const project = {
-      ...(data.project || {}),
-      transmittalNumber: dbTransmittalNumber,
-    };
+      const nextSeq = maxSeq + 1;
+      const dbTransmittalNumber = `${prefix}${String(nextSeq).padStart(4, "0")}`;
 
-    const transmittal = await db.transmittal.create({
-      data: {
-        userId: session.user.id,
-        notes: data.notes || "",
-        transmittalNumber: dbTransmittalNumber || null,
-        agencyId,
-        handDelivery: Boolean(data.transmissionMethod?.personalDelivery),
-        pickUp: Boolean(data.transmissionMethod?.pickUp),
-        courier: Boolean(data.transmissionMethod?.grabLalamove),
-        registeredMail: Boolean(data.transmissionMethod?.registeredMail),
-        projectName: data.project?.projectName || "",
-        projectNumber: data.project?.projectNumber || null,
-        engagementRefNumber: data.project?.engagementRef || null,
-        projectPurpose: data.project?.purpose || null,
-        project,
-        sender: data.sender || {},
-        receivedBy: data.receivedBy || {},
-        footerNotes: data.footerNotes || {},
-        preparedBy: data.signatories?.preparedBy || "",
-        preparedByRole: data.signatories?.preparedByRole || "",
-        notedBy: data.signatories?.notedBy || "",
-        notedByRole: data.signatories?.notedByRole || "",
-        timeReleased: data.signatories?.timeReleased || "",
-        recipients: {
-          create: [
-            {
-              recipientName: data.recipient?.to || "",
-              recipientOrganization: data.recipient?.company || null,
-              recipientAttention: data.recipient?.attention || null,
-              recipientFullAddress: data.recipient?.address || null,
-              recipientAgencyContactNumber: data.recipient?.contactNumber || null,
-              recipientAgencyEmail: data.recipient?.email || null,
-            },
-          ],
+      const project = {
+        ...(data.project || {}),
+        transmittalNumber: dbTransmittalNumber,
+      };
+
+      return tx.transmittal.create({
+        data: {
+          userId: session.user.id,
+          notes: data.notes || "",
+          transmittalNumber: dbTransmittalNumber,
+          agencyId,
+          handDelivery: Boolean(data.transmissionMethod?.personalDelivery),
+          pickUp: Boolean(data.transmissionMethod?.pickUp),
+          courier: Boolean(data.transmissionMethod?.grabLalamove),
+          registeredMail: Boolean(data.transmissionMethod?.registeredMail),
+          projectName: data.project?.projectName || "",
+          projectNumber: data.project?.projectNumber || null,
+          engagementRefNumber: data.project?.engagementRef || null,
+          projectPurpose: data.project?.purpose || null,
+          project,
+          sender: data.sender || {},
+          receivedBy: data.receivedBy || {},
+          footerNotes: data.footerNotes || {},
+          preparedBy: data.signatories?.preparedBy || "",
+          preparedByRole: data.signatories?.preparedByRole || "",
+          notedBy: data.signatories?.notedBy || "",
+          notedByRole: data.signatories?.notedByRole || "",
+          timeReleased: data.signatories?.timeReleased || "",
+          recipients: {
+            create: [
+              {
+                recipientName: data.recipient?.to || "",
+                recipientOrganization: data.recipient?.company || null,
+                recipientAttention: data.recipient?.attention || null,
+                recipientFullAddress: data.recipient?.address || null,
+                recipientAgencyContactNumber: data.recipient?.contactNumber || null,
+                recipientAgencyEmail: data.recipient?.email || null,
+              },
+            ],
+          },
+          items: {
+            create: Array.isArray(data.items)
+              ? data.items.map((item: any) => ({
+                  qty: item.qty || "",
+                  noOfItems: item.noOfItems || "",
+                  documentNumber: item.documentNumber || "",
+                  description: item.description || "",
+                  remarks: item.remarks || "",
+                  fileType: item.fileType || null,
+                  fileSource: item.fileSource || null,
+                }))
+              : [],
+          },
         },
-        items: {
-          create: Array.isArray(data.items)
-            ? data.items.map((item: any) => ({
-                qty: item.qty || "",
-                noOfItems: item.noOfItems || "",
-                documentNumber: item.documentNumber || "",
-                description: item.description || "",
-                remarks: item.remarks || "",
-                fileType: item.fileType || null,
-                fileSource: item.fileSource || null,
-              }))
-            : [],
+        include: {
+          items: true,
+          recipients: true,
+          agency: true,
         },
-      },
-      include: {
-        items: true,
-        recipients: true,
-        agency: true,
-      },
+      });
     });
 
     return NextResponse.json({ transmittal: mapTransmittalForApi(transmittal) });

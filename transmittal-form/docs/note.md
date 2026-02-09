@@ -1,3 +1,6 @@
-- in the transmittal id the generated one like 202601-0001 , if the user encoded this means this should not appear again, This should be unique data that no one can replicate so that in the history when I tried to browse again I can see and potentially edit some encoded things inside.
-- System will have a gsheet setup where we can link a g-sheet so one there is a created row of what transmittal document.
-- Internet detector so that there will a pop up when there is no internet so user will be alerted
+- [DONE] in the transmittal id the generated one like 202601-0001 , if the user encoded this means this should not appear again, This should be unique data that no one can replicate so that in the history when I tried to browse again I can see and potentially edit some encoded things inside.
+  - Server now generates the transmittal number atomically inside a DB transaction (no duplicates possible). The Transmittal ID field is read-only in the UI.
+- [DONE] System will have a gsheet setup where we can link a g-sheet so one there is a created row of what transmittal document.
+  - In the History tab, users can paste a Google Sheets URL to link. On every new transmittal creation a summary row is auto-appended (Transmittal No., Date, Project, Recipient, etc.). Headers are written automatically on first use. Google Sheets OAuth scope added.
+- [DONE] Internet detector so that there will a pop up when there is no internet so user will be alerted
+  - A fullscreen modal with a "No Internet Connection" message appears instantly when the browser goes offline and auto-dismisses when connectivity is restored. Rendered globally via the root layout.

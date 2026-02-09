@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import Link from "next/link";
+import { Pencil, Eye } from "lucide-react";
 import { TransmittalTemplate } from "../NewReportTemplate";
 import { FloatingAccount } from "../FloatingAccount";
 import { BulkAddModal } from "../modals/BulkAddModal";
@@ -9,13 +9,6 @@ import { AgencyPresetModal } from "../modals/AgencyPresetModal";
 import { DriveFileModal } from "../modals/DriveFileModal";
 import { DocxPreviewModal } from "../modals/DocxPreviewModal";
 import { ErrorBoundary } from "../ErrorBoundary";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import { parseTransmittalDocument } from "../../services/geminiService";
 import {
   listFilesInFolder,
@@ -23,13 +16,20 @@ import {
   extractFileIdFromLink,
   isFolderLink,
   getFileMetadata,
-  getFileContentAsBase64,
   listDriveFiles,
   checkDriveAccess,
   clearGoogleToken,
 } from "../../services/googleDriveService";
 import { useFileProcessing, resizeImage } from "../../hooks/useFileProcessing";
 import { generateTransmittalDocx } from "../../services/docxGenerator";
+import {
+  getLinkedSheetId,
+  setLinkedSheetId,
+  clearLinkedSheetId,
+  extractSheetIdFromUrl,
+  getSpreadsheetTitle,
+  appendTransmittalRow,
+} from "../../services/googleSheetsService";
 import { signIn, signOut, useSession } from "../../lib/auth-client";
 import {
   AppData,
@@ -42,6 +42,19 @@ import {
 } from "../../types";
 import * as mammoth from "mammoth";
 
+// Modular UI components
+import { LoadingScreen } from "./LoadingScreen";
+import { LoginScreen } from "./LoginScreen";
+import { SidebarHeader } from "./SidebarHeader";
+import { SidebarFooter } from "./SidebarFooter";
+import { TabBar, type TabKey } from "./TabBar";
+import { ContentTab } from "./tabs/ContentTab";
+import { SenderTab } from "./tabs/SenderTab";
+import { RecipientTab } from "./tabs/RecipientTab";
+import { ProjectTab } from "./tabs/ProjectTab";
+import { SignatoriesTab } from "./tabs/SignatoriesTab";
+import { HistoryTab } from "./tabs/HistoryTab";
+
 // Add type declaration
 declare global {
   interface Window {
@@ -49,33 +62,6 @@ declare global {
     html2canvas: any;
   }
 }
-
-const formatTime24hTo12h = (time24h: string): string => {
-  const match = time24h.match(/^\s*(\d{1,2}):(\d{2})\s*$/);
-  if (!match) return "";
-  const hours = Number(match[1]);
-  const minutes = match[2];
-  const minutesNum = Number(minutes);
-  if (
-    !Number.isFinite(hours) ||
-    hours < 0 ||
-    hours > 23 ||
-    !Number.isFinite(minutesNum) ||
-    minutesNum < 0 ||
-    minutesNum > 59
-  )
-    return "";
-  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
-  const ampm = hours >= 12 ? "PM" : "AM";
-  return `${hour12}:${minutes} ${ampm}`;
-};
-
-type AgencyPreset = {
-  id: string;
-  label: string;
-  sender: SenderInfo;
-  updatedAt: string;
-};
 
 type DbAgency = {
   id: string;
@@ -88,84 +74,6 @@ type DbAgency = {
   email: string | null;
   logoBase64: string | null;
   updatedAt: string;
-};
-
-const parseTimeTo24h = (value: string): string => {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-
-  const direct24h = trimmed.match(/^(\d{1,2}):(\d{2})$/);
-  if (direct24h) {
-    const h = Number(direct24h[1]);
-    const m = Number(direct24h[2]);
-    if (
-      Number.isFinite(h) &&
-      Number.isFinite(m) &&
-      h >= 0 &&
-      h <= 23 &&
-      m >= 0 &&
-      m <= 59
-    ) {
-      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-    }
-    return "";
-  }
-
-  const match12h = trimmed.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
-  if (!match12h) return "";
-
-  let hours = Number(match12h[1]);
-  const minutes = Number(match12h[2]);
-  const ampm = match12h[3].toUpperCase();
-
-  if (
-    !Number.isFinite(hours) ||
-    !Number.isFinite(minutes) ||
-    hours < 1 ||
-    hours > 12 ||
-    minutes < 0 ||
-    minutes > 59
-  ) {
-    return "";
-  }
-
-  if (ampm === "AM") {
-    hours = hours === 12 ? 0 : hours;
-  } else {
-    hours = hours === 12 ? 12 : hours + 12;
-  }
-
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
-};
-
-const ExpandingTextarea = ({
-  value,
-  onChange,
-  placeholder,
-  className = "",
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  className?: string;
-}) => {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-    }
-  }, [value]);
-  return (
-    <Textarea
-      ref={textareaRef}
-      className={`overflow-hidden resize-none min-h-[44px] ${className}`}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      rows={1}
-    />
-  );
 };
 
 const createInitialData = (): AppData => ({
@@ -248,9 +156,7 @@ const AppContent: React.FC = () => {
   );
   const [driveError, setDriveError] = useState("");
   const [isDriveLoading, setIsDriveLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<
-    "content" | "sender" | "recipient" | "project" | "signatories" | "history"
-  >("content");
+  const [activeTab, setActiveTab] = useState<TabKey>("content");
   const [history, setHistory] = useState<HistoryItem[]>(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -325,6 +231,54 @@ const AppContent: React.FC = () => {
     () => createInitialData().sender,
   );
 
+  // Google Sheets linking state
+  const [linkedSheetTitle, setLinkedSheetTitle] = useState<string | null>(null);
+  const [sheetUrlInput, setSheetUrlInput] = useState("");
+  const [sheetLinkError, setSheetLinkError] = useState("");
+  const [isLinkingSheet, setIsLinkingSheet] = useState(false);
+
+  // Restore linked sheet title on mount
+  useEffect(() => {
+    const id = getLinkedSheetId();
+    if (id) {
+      getSpreadsheetTitle(id)
+        .then((title) => setLinkedSheetTitle(title))
+        .catch(() => {
+          clearLinkedSheetId();
+          setLinkedSheetTitle(null);
+        });
+    }
+  }, []);
+
+  const handleLinkSheet = async () => {
+    setSheetLinkError("");
+    const url = sheetUrlInput.trim();
+    if (!url) return;
+    const id = extractSheetIdFromUrl(url);
+    if (!id) {
+      setSheetLinkError("Invalid Google Sheets URL");
+      return;
+    }
+    setIsLinkingSheet(true);
+    try {
+      const title = await getSpreadsheetTitle(id);
+      setLinkedSheetId(id);
+      setLinkedSheetTitle(title);
+      setSheetUrlInput("");
+    } catch {
+      setSheetLinkError(
+        "Cannot access this spreadsheet. Make sure it exists and you have edit access.",
+      );
+    } finally {
+      setIsLinkingSheet(false);
+    }
+  };
+
+  const handleUnlinkSheet = () => {
+    clearLinkedSheetId();
+    setLinkedSheetTitle(null);
+  };
+
   const getFileTimestamp = () =>
     new Date()
       .toISOString()
@@ -339,7 +293,7 @@ const AppContent: React.FC = () => {
     }
   }, [session]);
 
-  const fetchNextTransmittalNumber = async () => {
+  const fetchNextTransmittalNumber = async (force = false) => {
     if (!apiBaseUrl) return;
     try {
       const response = await fetch(
@@ -352,7 +306,7 @@ const AppContent: React.FC = () => {
       const payload = await response.json().catch(() => ({}));
       if (payload?.transmittalNumber) {
         setData((prev) => {
-          if (prev.project.transmittalNumber) return prev;
+          if (!force && prev.project.transmittalNumber) return prev;
           return {
             ...prev,
             project: {
@@ -589,6 +543,40 @@ const AppContent: React.FC = () => {
           return next;
         });
         setActiveTransmittalId(payload.transmittal.id);
+
+        // Sync the form with the server-assigned transmittal number
+        // (the server generates the number atomically to prevent duplicates)
+        const serverProject = payload.transmittal.project || {};
+        const serverNumber = String(serverProject.transmittalNumber || "");
+        if (serverNumber) {
+          setData((prev) => ({
+            ...prev,
+            project: { ...prev.project, transmittalNumber: serverNumber },
+          }));
+        }
+
+        // Append row to linked Google Sheet (non-blocking, only on create)
+        if (!isEditing && getLinkedSheetId()) {
+          const methods: string[] = [];
+          if (data.transmissionMethod?.personalDelivery)
+            methods.push("Hand Delivery");
+          if (data.transmissionMethod?.pickUp) methods.push("Pick Up");
+          if (data.transmissionMethod?.grabLalamove) methods.push("Courier");
+          if (data.transmissionMethod?.registeredMail)
+            methods.push("Registered Mail");
+
+          appendTransmittalRow({
+            transmittalNumber: serverNumber || data.project.transmittalNumber,
+            date: data.project.date,
+            projectName: data.project.projectName,
+            recipientName: data.recipient.to,
+            recipientCompany: data.recipient.company,
+            preparedBy: data.signatories.preparedBy,
+            notedBy: data.signatories.notedBy,
+            itemsCount: data.items.length,
+            transmissionMethod: methods.join(", ") || "—",
+          }).catch(() => {});
+        }
       }
     } catch (error: any) {
       console.error("Save transmittal failed:", error);
@@ -614,13 +602,11 @@ const AppContent: React.FC = () => {
   };
 
   const loadFromHistory = (item: HistoryItem) => {
-    if (confirm("Replace current workspace with this history snapshot?")) {
-      setData(item.data);
-      setActiveTransmittalId(item.id);
-      setActiveTab("content");
-      setStatusMsg("Snapshot Restored");
-      setTimeout(() => setStatusMsg(""), 3000);
-    }
+    setData(item.data);
+    setActiveTransmittalId(item.id);
+    setActiveTab("content");
+    setStatusMsg("Snapshot Restored");
+    setTimeout(() => setStatusMsg(""), 3000);
   };
 
   const deleteHistoryItem = (id: string, e: React.MouseEvent) => {
@@ -629,17 +615,11 @@ const AppContent: React.FC = () => {
   };
 
   const resetForNewAnalysis = () => {
-    if (
-      confirm(
-        "Reset current form? This will not affect your History snapshots.",
-      )
-    ) {
-      setData(createInitialData());
-      setActiveTransmittalId(null);
-      fetchNextTransmittalNumber();
-      setStatusMsg("Form Reset");
-      setTimeout(() => setStatusMsg(""), 3000);
-    }
+    setData(createInitialData());
+    setActiveTransmittalId(null);
+    fetchNextTransmittalNumber(true);
+    setStatusMsg("Form Reset");
+    setTimeout(() => setStatusMsg(""), 3000);
   };
 
   const updateField = (section: keyof AppData, field: string, value: any) => {
@@ -856,7 +836,9 @@ const AppContent: React.FC = () => {
       const base64 = await resizeImage(file, 400);
       updateField("sender", "logoBase64", `data:image/jpeg;base64,${base64}`);
     } catch (err: any) {
-      alert(`Logo Error: ${err.message}`);
+      setStatusMsg(`Logo Error: ${err.message}`);
+      setStatusType("error");
+      setTimeout(() => setStatusMsg(""), 3000);
     } finally {
       setLogoInputKey((prev) => prev + 1);
     }
@@ -874,7 +856,9 @@ const AppContent: React.FC = () => {
         logoBase64: `data:image/jpeg;base64,${base64}`,
       }));
     } catch (err: any) {
-      alert(`Logo Error: ${err.message}`);
+      setStatusMsg(`Logo Error: ${err.message}`);
+      setStatusType("error");
+      setTimeout(() => setStatusMsg(""), 3000);
     } finally {
       e.target.value = "";
     }
@@ -1237,7 +1221,9 @@ const AppContent: React.FC = () => {
 
   const handleSendEmail = () => {
     if (!data.recipient.email) {
-      alert("Add Recipient Email first.");
+      setStatusMsg("Add Recipient Email first.");
+      setStatusType("error");
+      setTimeout(() => setStatusMsg(""), 3000);
       return;
     }
     const subject = encodeURIComponent(
@@ -1253,54 +1239,11 @@ const AppContent: React.FC = () => {
   };
 
   if (isPending) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100 font-sans">
-        <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl p-10 text-center">
-          <div className="w-12 h-12 border-4 border-brand-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-xs font-black uppercase tracking-widest text-slate-500">
-            Loading session
-          </p>
-        </div>
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   if (!session?.user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100 font-sans">
-        <div className="bg-white border border-slate-200 rounded-[36px] shadow-2xl w-full max-w-lg p-10 text-center">
-          <h1 className="text-2xl font-black text-slate-900 font-display">
-            Smart Transmittal
-          </h1>
-          <p className="text-sm text-slate-500 mt-2">
-            This is a private system created for the Internal Document
-            Transmittal System. Please sign in
-          </p>
-          <button
-            onClick={handleGoogleSignIn}
-            className="mt-8 w-full py-4 rounded-2xl bg-slate-900 text-white font-bold uppercase tracking-widest text-xs shadow-xl hover:bg-slate-800 transition-all"
-          >
-            Sign in with Google
-          </button>
-          <div className="flex justify-center gap-6 mt-6">
-            <Link
-              href="/legal/privacy-policy"
-              target="_blank"
-              className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
-            >
-              Privacy Policy
-            </Link>
-            <Link
-              href="/legal/terms-of-service"
-              target="_blank"
-              className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
-            >
-              Terms of Service
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
+    return <LoginScreen onGoogleSignIn={handleGoogleSignIn} />;
   }
 
   return (
@@ -1312,782 +1255,110 @@ const AppContent: React.FC = () => {
           className="w-14 h-14 bg-slate-900 text-white rounded-full shadow-2xl flex items-center justify-center hover:bg-slate-800 transition-all active:scale-95"
         >
           {showPreview ? (
-            <svg
-              className="w-6 h-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-              ></path>
-            </svg>
+            <Pencil className="w-6 h-6" />
           ) : (
-            <svg
-              className="w-6 h-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-              ></path>
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-              ></path>
-            </svg>
+            <Eye className="w-6 h-6" />
           )}
         </button>
       </div>
 
+      {/* ─── Sidebar ─── */}
       <div
         className={`${showPreview ? "hidden" : "flex"} w-full lg:flex lg:w-[420px] bg-white/80 backdrop-blur-xl border-r border-slate-200/60 flex-col h-full shadow-2xl z-20 overflow-hidden absolute inset-0 lg:static`}
       >
-        <div className="p-8 border-b border-slate-100 bg-white/40">
-          <div className="flex justify-between items-center mb-1">
-            <h1 className="font-display font-black text-2xl text-slate-900 tracking-tighter">
-              Smart Transmittal
-            </h1>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setShowPreview(true)}
-                className="lg:hidden text-slate-400 hover:text-brand-600 transition-colors"
-                title="Minimize Sidebar"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2.5"
-                    d="M19 9l-7 7-7-7"
-                  ></path>
-                </svg>
-              </button>
-              <button
-                onClick={handleSignOut}
-                className="text-[9px] font-black text-slate-400 hover:text-slate-700 uppercase tracking-widest"
-              >
-                Sign out
-              </button>
-            </div>
-          </div>
-          <div className="flex justify-between items-center mt-1">
-            <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">
-              {isDriveReady
-                ? "✓ Drive Connected"
-                : "Enterprise Controller v2.1"}
-            </p>
-            <button
-              onClick={resetForNewAnalysis}
-              className="text-[9px] font-black text-slate-400 hover:text-red-500 uppercase tracking-widest transition-colors"
-            >
-              Clear Workspace
-            </button>
-          </div>
-        </div>
+        <SidebarHeader
+          isDriveReady={isDriveReady}
+          onSignOut={handleSignOut}
+          onResetWorkspace={resetForNewAnalysis}
+          showPreview={showPreview}
+          onTogglePreview={setShowPreview}
+        />
 
-        <div className="flex flex-wrap p-2 bg-slate-100/50 m-5 rounded-2xl gap-2 shrink-0">
-          <button
-            onClick={() => setActiveTab("content")}
-            className={`flex-1 py-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === "content" ? "bg-white shadow-sm text-slate-800" : "text-slate-400 hover:text-slate-600"}`}
-          >
-            Content
-          </button>
-          <button
-            onClick={() => setActiveTab("sender")}
-            className={`flex-1 py-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === "sender" ? "bg-white shadow-sm text-slate-800" : "text-slate-400 hover:text-slate-600"}`}
-          >
-            Brand
-          </button>
-          <button
-            onClick={() => setActiveTab("recipient")}
-            className={`flex-1 py-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === "recipient" ? "bg-white shadow-sm text-slate-800" : "text-slate-400 hover:text-slate-600"}`}
-          >
-            Recipient
-          </button>
-          <button
-            onClick={() => setActiveTab("project")}
-            className={`flex-1 py-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === "project" ? "bg-white shadow-sm text-slate-800" : "text-slate-400 hover:text-slate-600"}`}
-          >
-            Project
-          </button>
-          <button
-            onClick={() => setActiveTab("signatories")}
-            className={`flex-1 py-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === "signatories" ? "bg-white shadow-sm text-slate-800" : "text-slate-400 hover:text-slate-600"}`}
-          >
-            Sign-off
-          </button>
-          <button
-            onClick={() => setActiveTab("history")}
-            className={`flex-1 py-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === "history" ? "bg-white shadow-sm text-slate-800" : "text-slate-400 hover:text-slate-600"}`}
-          >
-            History
-          </button>
-        </div>
+        <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
 
         <div className="flex-1 overflow-y-auto p-8 space-y-10 scrollbar-hide">
           {activeTab === "content" && (
-            <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <section>
-                <div className="flex justify-between items-end mb-4">
-                  <h2 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">
-                    Intelligent Import
-                  </h2>
-                  {isParsing && (
-                    <span className="text-[10px] font-bold text-brand-600 animate-pulse uppercase">
-                      Parsing {parseProgress.current}/{parseProgress.total}...
-                    </span>
-                  )}
-                </div>
-                <div className="space-y-4">
-                  <div className="relative group">
-                    <textarea
-                      className="w-full p-5 bg-slate-100/50 border border-slate-200 rounded-3xl text-xs font-medium focus:bg-white focus:ring-4 focus:ring-brand-500/5 focus:border-brand-500 outline-none transition-all placeholder-slate-300 min-h-[120px]"
-                      placeholder="Paste text, file names, Google Drive file links, or folder links here..."
-                      value={smartInput}
-                      onChange={(e) => setSmartInput(e.target.value)}
-                    />
-                    <div className="absolute right-4 bottom-4 flex gap-2">
-                      <button
-                        onClick={handleSmartAnalysis}
-                        disabled={!smartInput.trim() || isAnalyzingText}
-                        className="p-2 bg-slate-900 text-white rounded-xl shadow-lg hover:shadow-slate-200 transition-all disabled:opacity-50 active:scale-90"
-                      >
-                        <svg
-                          className={`w-4 h-4 ${isAnalyzingText ? "animate-spin" : ""}`}
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="2.5"
-                            d="M13 10V3L4 14h7v7l9-11h-7z"
-                          ></path>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      className="flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all shadow-sm"
-                    >
-                      <svg
-                        className="w-4 h-4 text-slate-400"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="2.5"
-                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                        ></path>
-                      </svg>
-                      Upload Files
-                    </button>
-                    <button
-                      onClick={handleOpenDriveModal}
-                      disabled={!isDriveReady}
-                      className="flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-50 transition-all shadow-sm"
-                    >
-                      <svg
-                        className="w-4 h-4 text-slate-400"
-                        fill="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path d="M7.71 3.5L1.15 15l2.86 5L10.57 8.5 7.71 3.5zm1.43 0l6.86 11.5h5.71l-6.86-11.5H9.14zm7.14 12.5H3.43l-2.28 4h13.71l2.28-4z" />
-                      </svg>
-                      Browse Drive
-                    </button>
-                  </div>
-                  <input
-                    type="file"
-                    multiple
-                    ref={fileInputRef}
-                    className="hidden"
-                    accept=".pdf,image/*"
-                    onChange={handleBatchUpload}
-                  />
-                  {statusMsg && (
-                    <div
-                      className={`p-4 rounded-2xl text-[10px] font-bold border animate-in slide-in-from-right duration-300 ${statusType === "error" ? "bg-red-50 border-red-100 text-red-600" : "bg-brand-50 border-brand-100 text-brand-600"}`}
-                    >
-                      {statusMsg}
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              <section className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <h2 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">
-                    Transmission
-                  </h2>
-                </div>
-                <div className="p-6 bg-slate-50/50 rounded-[32px] border border-slate-100/80 space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <label className="flex items-center gap-3 p-3 bg-white rounded-2xl border border-slate-100 cursor-pointer hover:border-brand-500 transition-all">
-                      <input
-                        type="checkbox"
-                        checked={data.transmissionMethod.personalDelivery}
-                        onChange={(e) =>
-                          updateTransmission(
-                            "personalDelivery",
-                            e.target.checked,
-                          )
-                        }
-                        className="w-4 h-4 rounded-md text-brand-600 border-slate-300"
-                      />
-                      <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">
-                        Hand Delivered
-                      </span>
-                    </label>
-                    <label className="flex items-center gap-3 p-3 bg-white rounded-2xl border border-slate-100 cursor-pointer hover:border-brand-500 transition-all">
-                      <input
-                        type="checkbox"
-                        checked={data.transmissionMethod.pickUp}
-                        onChange={(e) =>
-                          updateTransmission("pickUp", e.target.checked)
-                        }
-                        className="w-4 h-4 rounded-md text-brand-600 border-slate-300"
-                      />
-                      <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">
-                        Pick-up
-                      </span>
-                    </label>
-                    <label className="flex items-center gap-3 p-3 bg-white rounded-2xl border border-slate-100 cursor-pointer hover:border-brand-500 transition-all">
-                      <input
-                        type="checkbox"
-                        checked={data.transmissionMethod.grabLalamove}
-                        onChange={(e) =>
-                          updateTransmission("grabLalamove", e.target.checked)
-                        }
-                        className="w-4 h-4 rounded-md text-brand-600 border-slate-300"
-                      />
-                      <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">
-                        Courier
-                      </span>
-                    </label>
-                    <label className="flex items-center gap-3 p-3 bg-white rounded-2xl border border-slate-100 cursor-pointer hover:border-brand-500 transition-all">
-                      <input
-                        type="checkbox"
-                        checked={data.transmissionMethod.registeredMail}
-                        onChange={(e) =>
-                          updateTransmission("registeredMail", e.target.checked)
-                        }
-                        className="w-4 h-4 rounded-md text-brand-600 border-slate-300"
-                      />
-                      <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest">
-                        Registered Mail
-                      </span>
-                    </label>
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest ml-1">
-                      Internal Notes
-                    </Label>
-                    <Textarea
-                      rows={2}
-                      value={data.notes}
-                      onChange={(e) => handleUpdateNotes(e.target.value)}
-                    />
-                  </div>
-                </div>
-              </section>
-            </div>
+            <ContentTab
+              smartInput={smartInput}
+              onSmartInputChange={setSmartInput}
+              isAnalyzingText={isAnalyzingText}
+              onSmartAnalysis={handleSmartAnalysis}
+              isParsing={isParsing}
+              parseProgress={parseProgress}
+              fileInputRef={fileInputRef}
+              onBatchUpload={handleBatchUpload}
+              isDriveReady={isDriveReady}
+              onOpenDriveModal={handleOpenDriveModal}
+              statusMsg={statusMsg}
+              statusType={statusType}
+              transmissionMethod={data.transmissionMethod}
+              onUpdateTransmission={updateTransmission}
+              notes={data.notes}
+              onUpdateNotes={handleUpdateNotes}
+            />
           )}
 
           {activeTab === "sender" && (
-            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <h2 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">
-                Sender Branding
-              </h2>
-
-              <div className="flex flex-col sm:flex-row gap-3 items-end">
-                <div className="flex-1 space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Saved Agencies
-                  </Label>
-                  <select
-                    className="w-full h-9 rounded-md border border-input bg-transparent px-2.5 py-1 text-sm shadow-xs transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-3 outline-none"
-                    value={selectedAgencyId}
-                    onChange={(e) => setSelectedAgencyId(e.target.value)}
-                  >
-                    <option value="">Select agency...</option>
-                    {agencies.map((agency) => (
-                      <option key={agency.id} value={agency.id}>
-                        {agency.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <Button
-                  onClick={openAgencyModal}
-                  className="h-[52px] px-5 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg"
-                >
-                  Add
-                </Button>
-              </div>
-
-              <div className="flex flex-col items-center gap-6 p-6 bg-slate-50 rounded-[40px] border border-slate-200/60">
-                <div
-                  className="relative group cursor-pointer"
-                  onClick={() => logoInputRef.current?.click()}
-                >
-                  <div className="w-32 h-32 rounded-full border-4 border-white shadow-xl flex items-center justify-center bg-white overflow-hidden transition-transform group-hover:scale-105">
-                    {data.sender.logoBase64 ? (
-                      <img
-                        src={data.sender.logoBase64}
-                        alt="Company Logo"
-                        className="w-full h-full object-contain"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center text-slate-300">
-                        <svg
-                          className="w-8 h-8 mb-1"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="2"
-                            d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                          ></path>
-                        </svg>
-                        <span className="text-[8px] font-black uppercase tracking-widest">
-                          Add Logo
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  <input
-                    key={logoInputKey}
-                    type="file"
-                    ref={logoInputRef}
-                    className="hidden"
-                    accept="image/*"
-                    onChange={handleLogoUpload}
-                  />
-                </div>
-                <div className="text-center">
-                  <p className="text-[10px] font-black text-slate-800 uppercase tracking-widest">
-                    {data.sender.agencyName}
-                  </p>
-                </div>
-              </div>
-              <div className="space-y-5">
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Agency Name
-                  </Label>
-                  <Input
-                    value={data.sender.agencyName}
-                    onChange={(e) =>
-                      updateField("sender", "agencyName", e.target.value)
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Website
-                  </Label>
-                  <Input
-                    value={data.sender.website}
-                    onChange={(e) =>
-                      updateField("sender", "website", e.target.value)
-                    }
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                      Telephone
-                    </Label>
-                    <Input
-                      value={data.sender.telephone}
-                      onChange={(e) =>
-                        updateField("sender", "telephone", e.target.value)
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                      Mobile
-                    </Label>
-                    <Input
-                      value={data.sender.mobile}
-                      onChange={(e) =>
-                        updateField("sender", "mobile", e.target.value)
-                      }
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Email
-                  </Label>
-                  <Input
-                    value={data.sender.email}
-                    onChange={(e) =>
-                      updateField("sender", "email", e.target.value)
-                    }
-                  />
-                </div>
-              </div>
-            </div>
+            <SenderTab
+              agencies={agencies}
+              selectedAgencyId={selectedAgencyId}
+              onSelectAgency={setSelectedAgencyId}
+              onOpenAgencyModal={openAgencyModal}
+              sender={data.sender}
+              onUpdateField={updateField}
+              logoInputRef={logoInputRef}
+              logoInputKey={logoInputKey}
+              onLogoUpload={handleLogoUpload}
+            />
           )}
 
           {activeTab === "recipient" && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <h2 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em] mb-4">
-                Recipient Dossier
-              </h2>
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    To
-                  </Label>
-                  <Input
-                    className="opacity-50 cursor-not-allowed bg-slate-50"
-                    value={data.recipient.to}
-                    disabled
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Organization
-                  </Label>
-                  <Input
-                    value={data.recipient.company}
-                    onChange={(e) =>
-                      updateField("recipient", "company", e.target.value)
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Attention
-                  </Label>
-                  <Input
-                    value={data.recipient.attention}
-                    onChange={(e) =>
-                      updateField("recipient", "attention", e.target.value)
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Full Address
-                  </Label>
-                  <ExpandingTextarea
-                    value={data.recipient.address}
-                    onChange={(v) => updateField("recipient", "address", v)}
-                    placeholder="Full address..."
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                      Contact No.
-                    </Label>
-                    <Input
-                      value={data.recipient.contactNumber}
-                      onChange={(e) =>
-                        updateField(
-                          "recipient",
-                          "contactNumber",
-                          e.target.value,
-                        )
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                      Email
-                    </Label>
-                    <Input
-                      value={data.recipient.email}
-                      onChange={(e) =>
-                        updateField("recipient", "email", e.target.value)
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
+            <RecipientTab
+              recipient={data.recipient}
+              onUpdateField={updateField}
+            />
           )}
 
           {activeTab === "project" && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <h2 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em] mb-4">
-                Project Parameters
-              </h2>
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Contract/Project Title
-                  </Label>
-                  <Input
-                    value={data.project.projectName}
-                    onChange={(e) =>
-                      updateField("project", "projectName", e.target.value)
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Transmittal ID
-                  </Label>
-                  <Input
-                    className="font-mono text-[10px]"
-                    value={data.project.transmittalNumber}
-                    onChange={(e) =>
-                      updateField(
-                        "project",
-                        "transmittalNumber",
-                        e.target.value,
-                      )
-                    }
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Purpose
-                  </Label>
-                  <Input
-                    value={data.project.purpose}
-                    onChange={(e) =>
-                      updateField("project", "purpose", e.target.value)
-                    }
-                  />
-                </div>
-              </div>
-            </div>
+            <ProjectTab project={data.project} onUpdateField={updateField} />
           )}
 
           {activeTab === "signatories" && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <h2 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em] mb-4">
-                Signatories & Auth
-              </h2>
-              <div className="space-y-6">
-                <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100 space-y-4">
-                  <div className="space-y-1">
-                    <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                      Prepared By Name
-                    </Label>
-                    <Input
-                      value={data.signatories.preparedBy}
-                      onChange={(e) =>
-                        handleUpdateSignatory("preparedBy", e.target.value)
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                      Prepared By Role
-                    </Label>
-                    <Input
-                      value={data.signatories.preparedByRole}
-                      onChange={(e) =>
-                        handleUpdateSignatory("preparedByRole", e.target.value)
-                      }
-                    />
-                  </div>
-                </div>
-                <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100 space-y-4">
-                  <div className="space-y-1">
-                    <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                      Noted By Name
-                    </Label>
-                    <Input
-                      value={data.signatories.notedBy}
-                      onChange={(e) =>
-                        handleUpdateSignatory("notedBy", e.target.value)
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                      Noted By Role
-                    </Label>
-                    <Input
-                      value={data.signatories.notedByRole}
-                      onChange={(e) =>
-                        handleUpdateSignatory("notedByRole", e.target.value)
-                      }
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
-                    Time Released
-                  </Label>
-                  <Input
-                    type="time"
-                    step={60}
-                    value={parseTimeTo24h(data.signatories.timeReleased)}
-                    onChange={(e) =>
-                      handleUpdateSignatory(
-                        "timeReleased",
-                        formatTime24hTo12h(e.target.value),
-                      )
-                    }
-                  />
-                </div>
-              </div>
-            </div>
+            <SignatoriesTab
+              signatories={data.signatories}
+              onUpdateSignatory={handleUpdateSignatory}
+            />
           )}
 
           {activeTab === "history" && (
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xs font-black text-slate-800 uppercase tracking-[0.2em]">
-                  Workspace Snapshots
-                </h2>
-                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-                  {history.length}/20
-                </span>
-              </div>
-              {history.length === 0 ? (
-                <div className="text-center py-20 bg-slate-50/50 rounded-[40px] border border-dashed border-slate-200">
-                  <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">
-                    No Recent Snapshots
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {history.map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => loadFromHistory(item)}
-                      className="group p-5 bg-white border border-slate-200 rounded-[32px] cursor-pointer hover:border-brand-500 hover:shadow-xl transition-all relative overflow-hidden"
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="shrink-0 w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-brand-50 group-hover:text-brand-500 transition-all">
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth="2.5"
-                              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                            ></path>
-                          </svg>
-                        </div>
-                        <button
-                          onClick={(e) => deleteHistoryItem(item.id, e)}
-                          className="p-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      <div className="space-y-1">
-                        <p className="text-[10px] font-black text-slate-800 line-clamp-1">
-                          {item.projectName}
-                        </p>
-                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
-                          {item.transmittalNumber}
-                        </p>
-                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[9px] text-slate-500">
-                          <span className="font-semibold text-slate-600">
-                            {item.createdBy}
-                          </span>
-                          <span>Prepared: {item.preparedBy || "—"}</span>
-                          <span>Noted: {item.notedBy || "—"}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <HistoryTab
+              history={history}
+              onLoadFromHistory={loadFromHistory}
+              onDeleteHistoryItem={deleteHistoryItem}
+              linkedSheetTitle={linkedSheetTitle}
+              sheetUrlInput={sheetUrlInput}
+              onSheetUrlInputChange={(v) => {
+                setSheetUrlInput(v);
+                setSheetLinkError("");
+              }}
+              sheetLinkError={sheetLinkError}
+              isLinkingSheet={isLinkingSheet}
+              onLinkSheet={handleLinkSheet}
+              onUnlinkSheet={handleUnlinkSheet}
+            />
           )}
         </div>
 
-        <div className="p-8 border-t border-slate-200 bg-white shadow-[0_-10px_30px_rgba(0,0,0,0.03)]">
-          <div className="mb-3">
-            <Button
-              onClick={handleSaveTransmittal}
-              className="w-full py-3 rounded-[24px] bg-brand-600 text-white text-[10px] font-black uppercase tracking-[0.2em] shadow-lg hover:bg-brand-500 active:scale-95"
-            >
-              Save to History
-            </Button>
-          </div>
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <Button
-              onClick={handlePrint}
-              disabled={isGeneratingPdf}
-              className="flex flex-col items-center justify-center py-4 h-auto bg-slate-900 text-white rounded-[24px] shadow-2xl hover:bg-slate-800 active:scale-95 group"
-            >
-              <svg
-                className="w-5 h-5 mb-1 group-hover:scale-110 transition-transform"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
-                ></path>
-              </svg>
-              <span className="text-[9px] font-black uppercase tracking-[0.2em]">
-                Export PDF
-              </span>
-            </Button>
-            <Button
-              onClick={handleDownloadDocx}
-              disabled={isGeneratingDocx}
-              variant="outline"
-              className="flex flex-col items-center justify-center py-4 h-auto rounded-[24px] hover:border-brand-500 hover:text-brand-600 active:scale-95 group"
-            >
-              <svg
-                className="w-5 h-5 mb-1 group-hover:scale-110 transition-transform"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                ></path>
-              </svg>
-              <span className="text-[9px] font-black uppercase tracking-[0.2em]">
-                Export Word
-              </span>
-            </Button>
-          </div>
-        </div>
+        <SidebarFooter
+          onSaveTransmittal={handleSaveTransmittal}
+          onExportPdf={handlePrint}
+          onExportDocx={handleDownloadDocx}
+          isGeneratingPdf={isGeneratingPdf}
+          isGeneratingDocx={isGeneratingDocx}
+        />
       </div>
 
+      {/* ─── Preview Panel ─── */}
       <div
         ref={previewContainerRef}
         className={`${showPreview ? "flex" : "hidden"} lg:flex flex-1 h-full overflow-y-auto overflow-x-hidden bg-slate-200 p-4 lg:p-8 justify-start custom-scrollbar w-full absolute inset-0 lg:static z-10 flex-col items-center`}
@@ -2121,6 +1392,7 @@ const AppContent: React.FC = () => {
         </div>
       </div>
 
+      {/* ─── Modals ─── */}
       <BulkAddModal
         isOpen={isBulkModalOpen}
         onClose={() => setIsBulkModalOpen(false)}
