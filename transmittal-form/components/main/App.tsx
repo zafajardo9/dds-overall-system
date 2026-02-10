@@ -19,6 +19,7 @@ import {
   listDriveFiles,
   checkDriveAccess,
   clearGoogleToken,
+  uploadFileToDrive,
 } from "../../services/googleDriveService";
 import { useFileProcessing, resizeImage } from "../../hooks/useFileProcessing";
 import { generateTransmittalDocx } from "../../services/docxGenerator";
@@ -52,6 +53,12 @@ import { RecipientTab } from "./tabs/RecipientTab";
 import { ProjectTab } from "./tabs/ProjectTab";
 import { SignatoriesTab } from "./tabs/SignatoriesTab";
 import { TransmittalListModal } from "../modals/TransmittalListModal";
+import {
+  ExportChoiceModal,
+  type ExportFormat,
+} from "../modals/ExportChoiceModal";
+import { FolderPickerModal } from "../modals/FolderPickerModal";
+import { FileUploadModal } from "../modals/FileUploadModal";
 import { PreviewToolbar, ZOOM_STEPS } from "./PreviewToolbar";
 
 // Add type declaration
@@ -157,6 +164,14 @@ const AppContent: React.FC = () => {
   const [isDriveLoading, setIsDriveLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("content");
   const [isTransmittalListOpen, setIsTransmittalListOpen] = useState(false);
+  const [isFileUploadOpen, setIsFileUploadOpen] = useState(false);
+  const [exportChoiceOpen, setExportChoiceOpen] = useState(false);
+  const [exportFolderPickerOpen, setExportFolderPickerOpen] = useState(false);
+  const [pendingExportBlob, setPendingExportBlob] = useState<Blob | null>(null);
+  const [pendingExportFormat, setPendingExportFormat] =
+    useState<ExportFormat>("pdf");
+  const [pendingExportFileName, setPendingExportFileName] = useState("");
+  const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
   const [data, setData] = useState<AppData>(() => createInitialData());
   const [activeTransmittalId, setActiveTransmittalId] = useState<string | null>(
     null,
@@ -850,6 +865,16 @@ const AppContent: React.FC = () => {
     e.target.value = "";
   };
 
+  const handleUploadFiles = (files: File[]) => {
+    if (files.length === 0) return;
+    processDocs(files, (result) => {
+      if (result && result.items) {
+        addItems(result.items);
+        if (result.header) mergeHeaderData(result.header);
+      }
+    });
+  };
+
   const loadDriveFiles = async (query?: string) => {
     if (!isDriveReady) {
       setDriveError("Drive access not available. Please sign in again.");
@@ -1050,6 +1075,68 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const downloadBlobLocally = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const showExportChoice = (
+    blob: Blob,
+    format: ExportFormat,
+    fileName: string,
+  ) => {
+    setPendingExportBlob(blob);
+    setPendingExportFormat(format);
+    setPendingExportFileName(fileName);
+    setExportChoiceOpen(true);
+  };
+
+  const handleExportLocalDownload = () => {
+    if (pendingExportBlob) {
+      downloadBlobLocally(pendingExportBlob, pendingExportFileName);
+    }
+    setExportChoiceOpen(false);
+    setPendingExportBlob(null);
+  };
+
+  const handleExportUploadToDrive = () => {
+    setExportChoiceOpen(false);
+    setExportFolderPickerOpen(true);
+  };
+
+  const handleFolderSelected = async (folderId: string, folderName: string) => {
+    if (!pendingExportBlob) return;
+    setExportFolderPickerOpen(false);
+    setIsUploadingToDrive(true);
+    setStatusMsg("Uploading to Google Drive...");
+    setStatusType("info");
+    try {
+      const result = await uploadFileToDrive(
+        pendingExportBlob,
+        pendingExportFileName,
+        folderId,
+      );
+      setStatusMsg(`Uploaded to Drive: ${folderName}`);
+      setStatusType("info");
+      if (result.webViewLink) {
+        window.open(result.webViewLink, "_blank");
+      }
+    } catch (err: any) {
+      setStatusMsg(`Upload failed: ${err.message}`);
+      setStatusType("error");
+    } finally {
+      setIsUploadingToDrive(false);
+      setPendingExportBlob(null);
+      setTimeout(() => setStatusMsg(""), 5000);
+    }
+  };
+
   const handlePrint = async () => {
     setIsGeneratingPdf(true);
     setTimeout(async () => {
@@ -1060,15 +1147,16 @@ const AppContent: React.FC = () => {
       }
 
       const timestamp = getFileTimestamp();
+      const fileName = `${data.project.transmittalNumber}_${timestamp}.pdf`;
       const opt = {
         margin: 0.5,
-        filename: `${data.project.transmittalNumber}_${timestamp}.pdf`,
+        filename: fileName,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: { scale: 2, useCORS: true, letterRendering: true },
         jsPDF: { unit: "in", format: "letter", orientation: "portrait" },
       };
 
-      await window
+      const pdfBlob: Blob = await window
         .html2pdf()
         .from(element)
         .set(opt)
@@ -1086,9 +1174,10 @@ const AppContent: React.FC = () => {
             pdf.text(text, pageWidth - 1.25, pageHeight - 0.35);
           }
         })
-        .save();
+        .outputPdf("blob");
 
       setIsGeneratingPdf(false);
+      showExportChoice(pdfBlob, "pdf", fileName);
     }, 500);
   };
 
@@ -1097,15 +1186,10 @@ const AppContent: React.FC = () => {
     try {
       const blob = await generateTransmittalDocx(data);
       const timestamp = getFileTimestamp();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${data.project.transmittalNumber}_${timestamp}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } finally {
+      const fileName = `${data.project.transmittalNumber}_${timestamp}.docx`;
+      setIsGeneratingDocx(false);
+      showExportChoice(blob, "docx", fileName);
+    } catch {
       setIsGeneratingDocx(false);
     }
   };
@@ -1138,10 +1222,8 @@ const AppContent: React.FC = () => {
     );
     const csvContent = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `${data.project.transmittalNumber}_items.csv`;
-    link.click();
+    const fileName = `${data.project.transmittalNumber}_items.csv`;
+    showExportChoice(blob, "csv", fileName);
   };
 
   const handleSaveTransmittal = async () => {
@@ -1235,8 +1317,7 @@ const AppContent: React.FC = () => {
               onSmartAnalysis={handleSmartAnalysis}
               isParsing={isParsing}
               parseProgress={parseProgress}
-              fileInputRef={fileInputRef}
-              onBatchUpload={handleBatchUpload}
+              onOpenUploadModal={() => setIsFileUploadOpen(true)}
               isDriveReady={isDriveReady}
               onOpenDriveModal={handleOpenDriveModal}
               statusMsg={statusMsg}
@@ -1326,6 +1407,14 @@ const AppContent: React.FC = () => {
       </div>
 
       {/* ─── Modals ─── */}
+      <FileUploadModal
+        isOpen={isFileUploadOpen}
+        onClose={() => setIsFileUploadOpen(false)}
+        onUploadFiles={handleUploadFiles}
+        isDriveReady={isDriveReady}
+        isParsing={isParsing}
+        parseProgress={parseProgress}
+      />
       <TransmittalListModal
         isOpen={isTransmittalListOpen}
         onClose={() => setIsTransmittalListOpen(false)}
@@ -1360,6 +1449,26 @@ const AppContent: React.FC = () => {
         onToggle={handleDriveToggle}
         onToggleAll={handleDriveToggleAll}
         onAddSelected={handleDriveAddSelected}
+      />
+      <ExportChoiceModal
+        isOpen={exportChoiceOpen}
+        format={pendingExportFormat}
+        fileName={pendingExportFileName}
+        isUploading={isUploadingToDrive}
+        onDownloadLocal={handleExportLocalDownload}
+        onUploadToDrive={handleExportUploadToDrive}
+        onClose={() => {
+          setExportChoiceOpen(false);
+          setPendingExportBlob(null);
+        }}
+      />
+      <FolderPickerModal
+        isOpen={exportFolderPickerOpen}
+        onClose={() => {
+          setExportFolderPickerOpen(false);
+          setPendingExportBlob(null);
+        }}
+        onSelect={handleFolderSelected}
       />
       <AgencyPresetModal
         isOpen={isAgencyModalOpen}

@@ -15,8 +15,7 @@ interface ContentTabProps {
   onSmartAnalysis: () => void;
   isParsing: boolean;
   parseProgress: { current: number; total: number };
-  fileInputRef: React.RefObject<HTMLInputElement | null>;
-  onBatchUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onOpenUploadModal: () => void;
   isDriveReady: boolean;
   onOpenDriveModal: () => void;
   statusMsg: string;
@@ -34,8 +33,7 @@ export const ContentTab: React.FC<ContentTabProps> = ({
   onSmartAnalysis,
   isParsing,
   parseProgress,
-  fileInputRef,
-  onBatchUpload,
+  onOpenUploadModal,
   isDriveReady,
   onOpenDriveModal,
   statusMsg,
@@ -104,7 +102,7 @@ export const ContentTab: React.FC<ContentTabProps> = ({
           </p>
           <div className="grid grid-cols-2 gap-3">
             <Button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={onOpenUploadModal}
               variant="outline"
               className="flex items-center justify-center gap-2 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-sm"
             >
@@ -121,14 +119,6 @@ export const ContentTab: React.FC<ContentTabProps> = ({
               Browse Drive
             </Button>
           </div>
-          <input
-            type="file"
-            multiple
-            ref={fileInputRef}
-            className="hidden"
-            accept=".pdf,image/*"
-            onChange={onBatchUpload}
-          />
           {statusMsg && (
             <div
               className={`p-4 rounded-2xl text-[10px] font-bold border animate-in slide-in-from-right duration-300 ${statusType === "error" ? "bg-red-50 border-red-100 text-red-600" : "bg-brand-50 border-brand-100 text-brand-600"}`}

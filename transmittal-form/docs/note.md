@@ -4,3 +4,8 @@
   - In the History tab, users can paste a Google Sheets URL to link. On every new transmittal creation a summary row is auto-appended (Transmittal No., Date, Project, Recipient, etc.). Headers are written automatically on first use. Google Sheets OAuth scope added.
 - [DONE] Internet detector so that there will a pop up when there is no internet so user will be alerted
   - A fullscreen modal with a "No Internet Connection" message appears instantly when the browser goes offline and auto-dismisses when connectivity is restored. Rendered globally via the root layout.
+
+plan
+
+- system update for google drive integration fixing
+- after export user can have a selection download in my local or upload in google drive with power of selecting the folder integrated to them. Can we do that?
