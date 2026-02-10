@@ -10,6 +10,8 @@ import {
   Printer,
   LogOut,
   RotateCcw,
+  FilePlus2,
+  FolderOpen,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -33,6 +35,8 @@ import {
 } from "@/components/ui/alert-dialog";
 
 export interface SidebarMenuBarProps {
+  onNewTransmittal: () => void;
+  onOpenTransmittal: () => void;
   onSaveTransmittal: () => void;
   onExportPdf: () => void;
   onExportDocx: () => void;
@@ -46,6 +50,8 @@ export interface SidebarMenuBarProps {
 }
 
 export const SidebarMenuBar: React.FC<SidebarMenuBarProps> = ({
+  onNewTransmittal,
+  onOpenTransmittal,
   onSaveTransmittal,
   onExportPdf,
   onExportDocx,
@@ -74,9 +80,21 @@ export const SidebarMenuBar: React.FC<SidebarMenuBarProps> = ({
             className="min-w-[220px]"
           >
             <DropdownMenuGroup>
+              <DropdownMenuItem onClick={onNewTransmittal}>
+                <FilePlus2 className="mr-2 h-4 w-4" />
+                New Transmittal
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onOpenTransmittal}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                Open...
+                <DropdownMenuShortcut>⌘O</DropdownMenuShortcut>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
               <DropdownMenuItem onClick={onSaveTransmittal}>
                 <Save className="mr-2 h-4 w-4" />
-                Save to History
+                Save
                 <DropdownMenuShortcut>⌘S</DropdownMenuShortcut>
               </DropdownMenuItem>
             </DropdownMenuGroup>
@@ -149,10 +167,9 @@ export const SidebarMenuBar: React.FC<SidebarMenuBarProps> = ({
       <AlertDialog open={showResetDialog} onOpenChange={setShowResetDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Clear Workspace?</AlertDialogTitle>
+            <AlertDialogTitle>Clear Form?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will reset the current form. Your saved History snapshots
-              will not be affected.
+              This will reset the current form only.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

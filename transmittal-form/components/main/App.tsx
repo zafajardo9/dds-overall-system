@@ -24,13 +24,10 @@ import { useFileProcessing, resizeImage } from "../../hooks/useFileProcessing";
 import { generateTransmittalDocx } from "../../services/docxGenerator";
 import {
   getLinkedSheetId,
-  setLinkedSheetId,
-  clearLinkedSheetId,
-  extractSheetIdFromUrl,
-  getSpreadsheetTitle,
   appendTransmittalRow,
   isSheetUrl,
   readSheetRows,
+  extractSheetIdFromUrl,
 } from "../../services/googleSheetsService";
 import { signIn, signOut, useSession } from "../../lib/auth-client";
 import {
@@ -39,7 +36,6 @@ import {
   Signatories,
   ReceivedBy,
   FooterNotes,
-  HistoryItem,
   SenderInfo,
 } from "../../types";
 import * as mammoth from "mammoth";
@@ -55,7 +51,7 @@ import { SenderTab } from "./tabs/SenderTab";
 import { RecipientTab } from "./tabs/RecipientTab";
 import { ProjectTab } from "./tabs/ProjectTab";
 import { SignatoriesTab } from "./tabs/SignatoriesTab";
-import { HistoryTab } from "./tabs/HistoryTab";
+import { TransmittalListModal } from "../modals/TransmittalListModal";
 import { PreviewToolbar, ZOOM_STEPS } from "./PreviewToolbar";
 
 // Add type declaration
@@ -160,15 +156,7 @@ const AppContent: React.FC = () => {
   const [driveError, setDriveError] = useState("");
   const [isDriveLoading, setIsDriveLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("content");
-  const [history, setHistory] = useState<HistoryItem[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const saved = window.localStorage.getItem("transmittal_history");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [isTransmittalListOpen, setIsTransmittalListOpen] = useState(false);
   const [data, setData] = useState<AppData>(() => createInitialData());
   const [activeTransmittalId, setActiveTransmittalId] = useState<string | null>(
     null,
@@ -266,54 +254,6 @@ const AppContent: React.FC = () => {
     () => createInitialData().sender,
   );
 
-  // Google Sheets linking state
-  const [linkedSheetTitle, setLinkedSheetTitle] = useState<string | null>(null);
-  const [sheetUrlInput, setSheetUrlInput] = useState("");
-  const [sheetLinkError, setSheetLinkError] = useState("");
-  const [isLinkingSheet, setIsLinkingSheet] = useState(false);
-
-  // Restore linked sheet title on mount
-  useEffect(() => {
-    const id = getLinkedSheetId();
-    if (id) {
-      getSpreadsheetTitle(id)
-        .then((title) => setLinkedSheetTitle(title))
-        .catch(() => {
-          clearLinkedSheetId();
-          setLinkedSheetTitle(null);
-        });
-    }
-  }, []);
-
-  const handleLinkSheet = async () => {
-    setSheetLinkError("");
-    const url = sheetUrlInput.trim();
-    if (!url) return;
-    const id = extractSheetIdFromUrl(url);
-    if (!id) {
-      setSheetLinkError("Invalid Google Sheets URL");
-      return;
-    }
-    setIsLinkingSheet(true);
-    try {
-      const title = await getSpreadsheetTitle(id);
-      setLinkedSheetId(id);
-      setLinkedSheetTitle(title);
-      setSheetUrlInput("");
-    } catch {
-      setSheetLinkError(
-        "Cannot access this spreadsheet. Make sure it exists and you have edit access.",
-      );
-    } finally {
-      setIsLinkingSheet(false);
-    }
-  };
-
-  const handleUnlinkSheet = () => {
-    clearLinkedSheetId();
-    setLinkedSheetTitle(null);
-  };
-
   const getFileTimestamp = () =>
     new Date()
       .toISOString()
@@ -357,10 +297,6 @@ const AppContent: React.FC = () => {
   };
 
   useEffect(() => {
-    loadHistoryFromDb();
-  }, [session?.user?.id]);
-
-  useEffect(() => {
     if (session?.user) {
       fetchNextTransmittalNumber();
     }
@@ -386,18 +322,6 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     loadAgenciesFromDb();
   }, [session?.user?.id]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(
-        "transmittal_history",
-        JSON.stringify(history),
-      );
-    } catch {
-      return;
-    }
-  }, [history]);
 
   useEffect(() => {
     const id = data.agencyId ? String(data.agencyId) : "";
@@ -507,146 +431,107 @@ const AppContent: React.FC = () => {
     };
   };
 
-  const mapDbTransmittalToHistoryItem = (transmittal: any): HistoryItem => {
-    const data = mapDbTransmittalToAppData(transmittal);
-    const dateTime = [data.project.date, data.project.timeGenerated]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
+  const saveTransmittalToDb = async () => {
+    if (!session?.user || !apiBaseUrl) return;
+    const isEditing = Boolean(activeTransmittalId);
+    const url = isEditing
+      ? `${apiBaseUrl}/api/transmittals/${activeTransmittalId}`
+      : `${apiBaseUrl}/api/transmittals`;
+    const response = await fetch(url, {
+      method: isEditing ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ data }),
+    });
 
-    return {
-      id: transmittal.id,
-      timestamp: dateTime || new Date().toLocaleString(),
-      transmittalNumber: data.project.transmittalNumber,
-      projectName: data.project.projectName || "Untitled Project",
-      recipientName: data.recipient.to || "Unknown Recipient",
-      createdBy: session?.user?.name || session?.user?.email || "Unknown",
-      preparedBy: data.signatories.preparedBy || "",
-      notedBy: data.signatories.notedBy || "",
-      data,
-    };
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "Failed to save transmittal");
+    }
+
+    const payload = await response.json().catch(() => ({}));
+    if (payload?.transmittal) {
+      setActiveTransmittalId(payload.transmittal.id);
+
+      // Sync the form with the server-assigned transmittal number
+      const serverProject = payload.transmittal.project || {};
+      const serverNumber = String(serverProject.transmittalNumber || "");
+      if (serverNumber) {
+        setData((prev) => ({
+          ...prev,
+          project: { ...prev.project, transmittalNumber: serverNumber },
+        }));
+      }
+
+      // Append row to linked Google Sheet (non-blocking, only on create)
+      if (!isEditing && getLinkedSheetId()) {
+        const methods: string[] = [];
+        if (data.transmissionMethod?.personalDelivery)
+          methods.push("Hand Delivery");
+        if (data.transmissionMethod?.pickUp) methods.push("Pick Up");
+        if (data.transmissionMethod?.grabLalamove) methods.push("Courier");
+        if (data.transmissionMethod?.registeredMail)
+          methods.push("Registered Mail");
+
+        appendTransmittalRow({
+          transmittalNumber: serverNumber || data.project.transmittalNumber,
+          date: data.project.date,
+          projectName: data.project.projectName,
+          recipientName: data.recipient.to,
+          recipientCompany: data.recipient.company,
+          preparedBy: data.signatories.preparedBy,
+          notedBy: data.signatories.notedBy,
+          itemsCount: data.items.length,
+          transmissionMethod: methods.join(", ") || "—",
+        }).catch(() => {});
+      }
+    }
   };
 
-  const loadHistoryFromDb = async () => {
-    if (!session?.user || !apiBaseUrl) return;
+  const handleOpenTransmittal = async (id: string) => {
+    if (!apiBaseUrl) return;
     try {
       const response = await fetch(`${apiBaseUrl}/api/transmittals`, {
         credentials: "include",
       });
-      if (!response.ok) return;
+      if (!response.ok) throw new Error("Failed to fetch transmittals");
       const payload = await response.json();
-      const mapped = Array.isArray(payload.transmittals)
-        ? payload.transmittals.map(mapDbTransmittalToHistoryItem)
+      const transmittals = Array.isArray(payload.transmittals)
+        ? payload.transmittals
         : [];
-      setHistory(mapped);
-    } catch (error) {
-      console.error("Failed to load transmittals", error);
-    }
-  };
+      const match = transmittals.find((t: any) => t.id === id);
+      if (!match) throw new Error("Transmittal not found");
 
-  const saveTransmittalToDb = async () => {
-    if (!session?.user || !apiBaseUrl) return;
-    try {
-      const isEditing = Boolean(activeTransmittalId);
-      const url = isEditing
-        ? `${apiBaseUrl}/api/transmittals/${activeTransmittalId}`
-        : `${apiBaseUrl}/api/transmittals`;
-      const response = await fetch(url, {
-        method: isEditing ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ data }),
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || "Failed to save transmittal");
-      }
-
-      const payload = await response.json().catch(() => ({}));
-      if (payload?.transmittal) {
-        const historyItem = mapDbTransmittalToHistoryItem(payload.transmittal);
-        setHistory((prev) => {
-          const existingIndex = prev.findIndex(
-            (item) => item.id === historyItem.id,
-          );
-          if (existingIndex === -1) {
-            return [historyItem, ...prev].slice(0, 20);
-          }
-          const next = [...prev];
-          next[existingIndex] = historyItem;
-          return next;
-        });
-        setActiveTransmittalId(payload.transmittal.id);
-
-        // Sync the form with the server-assigned transmittal number
-        // (the server generates the number atomically to prevent duplicates)
-        const serverProject = payload.transmittal.project || {};
-        const serverNumber = String(serverProject.transmittalNumber || "");
-        if (serverNumber) {
-          setData((prev) => ({
-            ...prev,
-            project: { ...prev.project, transmittalNumber: serverNumber },
-          }));
-        }
-
-        // Append row to linked Google Sheet (non-blocking, only on create)
-        if (!isEditing && getLinkedSheetId()) {
-          const methods: string[] = [];
-          if (data.transmissionMethod?.personalDelivery)
-            methods.push("Hand Delivery");
-          if (data.transmissionMethod?.pickUp) methods.push("Pick Up");
-          if (data.transmissionMethod?.grabLalamove) methods.push("Courier");
-          if (data.transmissionMethod?.registeredMail)
-            methods.push("Registered Mail");
-
-          appendTransmittalRow({
-            transmittalNumber: serverNumber || data.project.transmittalNumber,
-            date: data.project.date,
-            projectName: data.project.projectName,
-            recipientName: data.recipient.to,
-            recipientCompany: data.recipient.company,
-            preparedBy: data.signatories.preparedBy,
-            notedBy: data.signatories.notedBy,
-            itemsCount: data.items.length,
-            transmissionMethod: methods.join(", ") || "—",
-          }).catch(() => {});
-        }
-      }
-    } catch (error: any) {
-      console.error("Save transmittal failed:", error);
-      setStatusMsg(error.message || "Failed to save transmittal");
-      setStatusType("error");
+      const appData = mapDbTransmittalToAppData(match);
+      setData(appData);
+      setActiveTransmittalId(id);
+      setActiveTab("content");
+      setStatusMsg("Transmittal loaded");
+      setStatusType("info");
       setTimeout(() => setStatusMsg(""), 3000);
+    } catch (e: any) {
+      setStatusMsg(e.message || "Failed to open transmittal");
+      setStatusType("error");
+      setTimeout(() => setStatusMsg(""), 5000);
     }
   };
 
-  const addToHistory = () => {
-    const newItem: HistoryItem = {
-      id: Date.now().toString(),
-      timestamp: new Date().toLocaleString(),
-      transmittalNumber: data.project.transmittalNumber,
-      projectName: data.project.projectName || "Untitled Project",
-      recipientName: data.recipient.to || "Unknown Recipient",
-      createdBy: session?.user?.name || session?.user?.email || "Unknown",
-      preparedBy: data.signatories.preparedBy || "",
-      notedBy: data.signatories.notedBy || "",
-      data: { ...data },
-    };
-    setHistory((prev) => [newItem, ...prev.slice(0, 19)]); // Keep last 20
-  };
-
-  const loadFromHistory = (item: HistoryItem) => {
-    setData(item.data);
-    setActiveTransmittalId(item.id);
-    setActiveTab("content");
-    setStatusMsg("Snapshot Restored");
-    setTimeout(() => setStatusMsg(""), 3000);
-  };
-
-  const deleteHistoryItem = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setHistory((prev) => prev.filter((item) => item.id !== id));
+  const handleDeleteTransmittal = async (id: string) => {
+    if (!apiBaseUrl) return;
+    const response = await fetch(`${apiBaseUrl}/api/transmittals/${id}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "Failed to delete");
+    }
+    // If the deleted transmittal is currently active, clear the workspace
+    if (activeTransmittalId === id) {
+      setData(createInitialData());
+      setActiveTransmittalId(null);
+      fetchNextTransmittalNumber(true);
+    }
   };
 
   const resetForNewAnalysis = () => {
@@ -1262,7 +1147,7 @@ const AppContent: React.FC = () => {
   const handleSaveTransmittal = async () => {
     try {
       await saveTransmittalToDb();
-      setStatusMsg("Saved to history");
+      setStatusMsg("Saved");
       setStatusType("info");
     } catch (e: any) {
       setStatusMsg(e.message || "Failed to save transmittal");
@@ -1325,6 +1210,8 @@ const AppContent: React.FC = () => {
         />
 
         <SidebarMenuBar
+          onNewTransmittal={resetForNewAnalysis}
+          onOpenTransmittal={() => setIsTransmittalListOpen(true)}
           onSaveTransmittal={handleSaveTransmittal}
           onExportPdf={handlePrint}
           onExportDocx={handleDownloadDocx}
@@ -1392,24 +1279,6 @@ const AppContent: React.FC = () => {
               onUpdateSignatory={handleUpdateSignatory}
             />
           )}
-
-          {activeTab === "history" && (
-            <HistoryTab
-              history={history}
-              onLoadFromHistory={loadFromHistory}
-              onDeleteHistoryItem={deleteHistoryItem}
-              linkedSheetTitle={linkedSheetTitle}
-              sheetUrlInput={sheetUrlInput}
-              onSheetUrlInputChange={(v) => {
-                setSheetUrlInput(v);
-                setSheetLinkError("");
-              }}
-              sheetLinkError={sheetLinkError}
-              isLinkingSheet={isLinkingSheet}
-              onLinkSheet={handleLinkSheet}
-              onUnlinkSheet={handleUnlinkSheet}
-            />
-          )}
         </div>
       </div>
 
@@ -1457,6 +1326,13 @@ const AppContent: React.FC = () => {
       </div>
 
       {/* ─── Modals ─── */}
+      <TransmittalListModal
+        isOpen={isTransmittalListOpen}
+        onClose={() => setIsTransmittalListOpen(false)}
+        onOpenTransmittal={handleOpenTransmittal}
+        onDeleteTransmittal={handleDeleteTransmittal}
+        apiBaseUrl={apiBaseUrl}
+      />
       <BulkAddModal
         isOpen={isBulkModalOpen}
         onClose={() => setIsBulkModalOpen(false)}

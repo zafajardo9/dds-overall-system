@@ -7,8 +7,7 @@ export type TabKey =
   | "sender"
   | "recipient"
   | "project"
-  | "signatories"
-  | "history";
+  | "signatories";
 
 const tabs: { key: TabKey; label: string }[] = [
   { key: "content", label: "Content" },
@@ -16,7 +15,6 @@ const tabs: { key: TabKey; label: string }[] = [
   { key: "recipient", label: "Recipient" },
   { key: "project", label: "Project" },
   { key: "signatories", label: "Sign-off" },
-  { key: "history", label: "History" },
 ];
 
 interface TabBarProps {

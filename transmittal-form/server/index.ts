@@ -487,6 +487,36 @@ app.post("/api/transmittals", async (req, res) => {
   }
 });
 
+app.delete("/api/transmittals/:id", async (req, res) => {
+  try {
+    const session = await auth.api.getSession({
+      headers: req.headers as any,
+    });
+
+    if (!session?.user) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+
+    const { id } = req.params;
+
+    const transmittal = await prisma.transmittal.findFirst({
+      where: { id, userId: session.user.id },
+      select: { id: true },
+    });
+
+    if (!transmittal) {
+      return res.status(404).json({ error: "Transmittal not found" });
+    }
+
+    await prisma.transmittal.delete({ where: { id } });
+
+    return res.json({ ok: true });
+  } catch (error: any) {
+    console.error("Delete transmittal error:", error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 app.get("/api/transmittals", async (req, res) => {
   try {
     const session = await auth.api.getSession({
