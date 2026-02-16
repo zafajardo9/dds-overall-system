@@ -32,6 +32,7 @@ const mapTransmittalForApi = (transmittal: any) => {
   const nextProject = {
     ...project,
     transmittalNumber: stripTransmittalPrefix(String(project.transmittalNumber || "")),
+    department: String(project.department || transmittal.department || ""),
   };
   return {
     ...transmittal,
@@ -255,10 +256,12 @@ app.put("/api/transmittals/:id", async (req, res) => {
 
     const rawTransmittalNumber = String(data.project?.transmittalNumber || "").trim();
     const dbTransmittalNumber = ensureDbTransmittalPrefix(rawTransmittalNumber);
+    const department = String(data.project?.department || "").trim();
 
     const project = {
       ...(data.project || {}),
       transmittalNumber: dbTransmittalNumber,
+      department,
     };
 
     const existing = await prisma.transmittal.findFirst({
@@ -297,6 +300,7 @@ app.put("/api/transmittals/:id", async (req, res) => {
         projectNumber: data.project?.projectNumber || null,
         engagementRefNumber: data.project?.engagementRef || null,
         projectPurpose: data.project?.purpose || null,
+        department: department || null,
         project,
         sender: data.sender || {},
         receivedBy: data.receivedBy || {},
@@ -409,10 +413,12 @@ app.post("/api/transmittals", async (req, res) => {
 
       const nextSeq = maxSeq + 1;
       const dbTransmittalNumber = `${prefix}${String(nextSeq).padStart(4, "0")}`;
+      const department = String(data.project?.department || "").trim();
 
       const project = {
         ...(data.project || {}),
         transmittalNumber: dbTransmittalNumber,
+        department,
       };
 
       return tx.transmittal.create({
@@ -428,6 +434,7 @@ app.post("/api/transmittals", async (req, res) => {
           projectNumber: data.project?.projectNumber || null,
           engagementRefNumber: data.project?.engagementRef || null,
           projectPurpose: data.project?.purpose || null,
+          department: department || null,
           project,
           sender: data.sender || {},
           receivedBy: data.receivedBy || {},

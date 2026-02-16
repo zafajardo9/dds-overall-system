@@ -93,6 +93,38 @@ const generateSmartPlaceholder = (type: string, description: string, filename: s
     return `${prefix}-PENDING`;
 };
 
+const stripFileExtension = (value: string): string =>
+    value.replace(/\.[^/.]+$/, "").trim();
+
+const resolveGeminiApiKey = (): string => {
+    return (
+        process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
+        process.env.NEXT_PUBLIC_GOOGLE_API_KEY ||
+        process.env.GEMINI_API_KEY ||
+        process.env.GOOGLE_API_KEY ||
+        ""
+    );
+};
+
+const resolveGeminiModel = (): string => {
+    return process.env.GEMINI_MODEL || "gemini-2.5-flash";
+};
+
+const buildFallbackParseResult = (fileName?: string, remarks: string = ""): ParseResult => {
+    const safeFileName = (fileName || "Uploaded Document").trim();
+    const description = stripFileExtension(safeFileName) || safeFileName;
+
+    return {
+        items: [{
+            description,
+            documentNumber: generateSmartPlaceholder("File", description, safeFileName),
+            qty: "1",
+            remarks,
+            documentType: "File",
+        }],
+    };
+};
+
 // --- ROBUST LOCAL PARSER (Fallback) ---
 const parseWithRegex = (content: string): ParseResult => {
     const lines = content.split(/\r?\n/);
@@ -130,8 +162,20 @@ export const parseTransmittalDocument = async (
 ): Promise<ParseResult> => {
 
   try {
-    const apiKey =
-      process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+    const apiKey = resolveGeminiApiKey();
+    if (!apiKey) {
+        const userMessage = "AI parser is not configured (missing Gemini API key).";
+
+        if (isText) {
+            return parseWithRegex(content);
+        }
+
+        return {
+            ...buildFallbackParseResult(fileName, userMessage),
+            error: userMessage,
+        };
+    }
+
     const ai = new GoogleGenAI({ apiKey });
     
     let parts: any[] = [];
@@ -151,7 +195,7 @@ export const parseTransmittalDocument = async (
     parts.push({ text: DOCUMENT_CONTROLLER_PROMPT });
 
     const response: GenerateContentResponse = await ai.models.generateContent({
-        model: "gemini-3-pro-preview",
+        model: resolveGeminiModel(),
         contents: { parts },
         config: {
             responseMimeType: "application/json",
@@ -209,15 +253,8 @@ export const parseTransmittalDocument = async (
         return parseWithRegex(content);
     }
     
-    return {
-        items: [{ 
-            description: fileName || "Document Analysis Failed", 
-            documentNumber: "ERR", 
-            qty: "0", 
-            remarks: userMessage,
-            documentType: "Error"
-        }],
-        error: userMessage
-    };
+    const fallbackResult = buildFallbackParseResult(fileName, userMessage);
+    fallbackResult.error = userMessage;
+    return fallbackResult;
   };
 };

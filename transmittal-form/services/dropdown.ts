@@ -1,4 +1,6 @@
 export const REMARKS_OPTIONS = [
-    "Options 1",
-    "Limot ko na",
+    "Original Copies", 
+    "Photocopies", 
+    "To Sign"
 ];
+

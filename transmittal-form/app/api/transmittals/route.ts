@@ -20,6 +20,7 @@ const mapTransmittalForApi = (transmittal: any) => {
     transmittalNumber: stripTransmittalPrefix(
       String(project.transmittalNumber || ""),
     ),
+    department: String(project.department || transmittal.department || ""),
   };
   return {
     ...transmittal,
@@ -116,10 +117,12 @@ export async function POST(request: Request) {
 
       const nextSeq = maxSeq + 1;
       const dbTransmittalNumber = `${prefix}${String(nextSeq).padStart(4, "0")}`;
+      const department = String(data.project?.department || "").trim();
 
       const project = {
         ...(data.project || {}),
         transmittalNumber: dbTransmittalNumber,
+        department,
       };
 
       return tx.transmittal.create({
@@ -136,6 +139,7 @@ export async function POST(request: Request) {
           projectNumber: data.project?.projectNumber || null,
           engagementRefNumber: data.project?.engagementRef || null,
           projectPurpose: data.project?.purpose || null,
+          department: department || null,
           project,
           sender: data.sender || {},
           receivedBy: data.receivedBy || {},

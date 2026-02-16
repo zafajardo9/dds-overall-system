@@ -9,7 +9,6 @@ import { AgencyPresetModal } from "../modals/AgencyPresetModal";
 import { DriveFileModal } from "../modals/DriveFileModal";
 import { DocxPreviewModal } from "../modals/DocxPreviewModal";
 import { ErrorBoundary } from "../ErrorBoundary";
-import { parseTransmittalDocument } from "../../services/geminiService";
 import {
   listFilesInFolder,
   extractFolderIdFromLink,
@@ -141,6 +140,136 @@ const createInitialData = (): AppData => ({
   agencyId: null,
   items: [],
 });
+
+const stripFileExtension = (fileName: string): string =>
+  fileName.replace(/\.[^/.]+$/, "").trim();
+
+const DRIVE_IMPORT_REMARK = "Imported from Google Drive";
+
+const deriveDocumentNumberFromFileName = (fileName: string): string => {
+  const baseName = stripFileExtension(fileName);
+  if (!baseName) return "";
+
+  const labeledMatch = baseName.match(
+    /\b(?:doc(?:ument)?|ref(?:erence)?|control|transmittal|invoice|inv|po|soa|official\s*receipt|cv|cert(?:ificate)?)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-_/]{2,})\b/i,
+  );
+  if (labeledMatch?.[1]) {
+    return labeledMatch[1].toUpperCase();
+  }
+
+  const tokenMatches =
+    baseName.match(/\b[A-Za-z0-9]+(?:[-_/][A-Za-z0-9]+)*\b/g) || [];
+
+  for (const token of tokenMatches) {
+    const cleanToken = token.replace(/^[-_/]+|[-_/]+$/g, "");
+    if (cleanToken.length < 4) continue;
+    if (!/[A-Za-z]/.test(cleanToken) || !/\d/.test(cleanToken)) continue;
+    return cleanToken.toUpperCase();
+  }
+
+  return "";
+};
+
+const resolveDocumentNumber = (
+  currentDocumentNumber: string,
+  sourceName: string,
+): string => {
+  const current = currentDocumentNumber.trim();
+  const normalizedCurrent = current
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const isGenericValue = [
+    "scan",
+    "drive",
+    "google drive",
+    "bulk import",
+    "browse drive",
+    "from google drive",
+    "via drive folder",
+    "via drive link",
+  ].includes(normalizedCurrent);
+
+  if (current && !isGenericValue) {
+    return current;
+  }
+
+  const derived = deriveDocumentNumberFromFileName(sourceName);
+  return derived || (isGenericValue ? "" : current);
+};
+
+const normalizeAutoDocumentNumber = (value: string): string =>
+  value
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+
+const createDriveDocumentNumber = (file: {
+  id: string;
+  name: string;
+}): string => {
+  const resolved = normalizeAutoDocumentNumber(
+    resolveDocumentNumber("", file.name),
+  );
+  if (resolved) return resolved;
+
+  const baseName = normalizeAutoDocumentNumber(stripFileExtension(file.name));
+  const idSuffix = normalizeAutoDocumentNumber(file.id).slice(-4) || "0000";
+
+  if (baseName) {
+    const trimmedBase = baseName.slice(0, 16).replace(/-+$/g, "");
+    return `DRV-${trimmedBase}-${idSuffix}`;
+  }
+
+  return `DRV-${idSuffix}`;
+};
+
+type ParsedDocumentResponse = {
+  items: Array<{
+    description?: string;
+    documentNumber?: string;
+    qty?: string;
+    remarks?: string;
+  }>;
+  header?: {
+    recipientName?: string;
+    recipientEmail?: string;
+    companyName?: string;
+    address?: string;
+    projectName?: string;
+    projectNumber?: string;
+    purpose?: string;
+  };
+  error?: string;
+};
+
+const parseTransmittalDocument = async (
+  content: string,
+  mimeType: string,
+  isText = false,
+  fileName?: string,
+): Promise<ParsedDocumentResponse> => {
+  const response = await fetch("/api/parse-transmittal", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      content,
+      mimeType,
+      isText,
+      fileName,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(payload?.error || "Failed to analyze document."));
+  }
+
+  return payload as ParsedDocumentResponse;
+};
 
 const AppContent: React.FC = () => {
   const [smartInput, setSmartInput] = useState("");
@@ -393,7 +522,7 @@ const AppContent: React.FC = () => {
         transmittalNumber: stripPrefix(
           String(projectData.transmittalNumber || ""),
         ),
-        department: projectData.department || "",
+        department: projectData.department || transmittal.department || "",
         date: projectData.date || "",
         timeGenerated: projectData.timeGenerated || "",
       },
@@ -402,7 +531,10 @@ const AppContent: React.FC = () => {
             id: item.id,
             qty: item.qty || "",
             noOfItems: item.noOfItems || "",
-            documentNumber: item.documentNumber || "",
+            documentNumber: resolveDocumentNumber(
+              item.documentNumber || "",
+              item.description || "",
+            ),
             description: item.description || "",
             remarks: item.remarks || "",
             fileType: item.fileType || undefined,
@@ -592,6 +724,19 @@ const AppContent: React.FC = () => {
       ...item,
       noOfItems: (index + 1).toString(),
     }));
+  const toDriveItem = (file: {
+    id: string;
+    name: string;
+  }): TransmittalItem => ({
+    id: file.id,
+    qty: "1",
+    noOfItems: "1",
+    documentNumber: createDriveDocumentNumber(file),
+    description: stripFileExtension(file.name),
+    remarks: DRIVE_IMPORT_REMARK,
+    fileType: "gdrive",
+    fileSource: `https://drive.google.com/file/d/${file.id}/view`,
+  });
   const addItems = (newItems: TransmittalItem[]) => {
     setData((prev) => ({
       ...prev,
@@ -654,18 +799,7 @@ const AppContent: React.FC = () => {
       setStatusMsg("Listing Drive files...");
       setStatusType("info");
       const files = await listFilesInFolder(folderId);
-      addItems(
-        files.map((f) => ({
-          id: f.id,
-          qty: "1",
-          noOfItems: "1",
-          documentNumber: "DRIVE",
-          description: f.name.replace(/\.[^/.]+$/, ""),
-          remarks: "Via Drive Folder",
-          fileType: "gdrive",
-          fileSource: `https://drive.google.com/file/d/${f.id}/view`,
-        })),
-      );
+      addItems(files.map((file) => toDriveItem(file)));
       setStatusMsg(`Fetched ${files.length} files from Drive.`);
       setStatusType("info");
       setTimeout(() => setStatusMsg(""), 3000);
@@ -685,6 +819,26 @@ const AppContent: React.FC = () => {
     setData((prev) => {
       const newItems = [...prev.items];
       newItems[index] = { ...newItems[index], [field]: value };
+      return { ...prev, items: newItems };
+    });
+  };
+
+  const adjustItemQty = (index: number, delta: number) => {
+    setData((prev) => {
+      const newItems = [...prev.items];
+      const item = newItems[index];
+      if (!item) return prev;
+
+      const currentQty = Number.parseInt(String(item.qty || "").trim(), 10);
+      const baseQty =
+        Number.isFinite(currentQty) && currentQty > 0 ? currentQty : 1;
+      const nextQty = Math.max(1, baseQty + delta);
+
+      newItems[index] = {
+        ...item,
+        qty: String(nextQty),
+      };
+
       return { ...prev, items: newItems };
     });
   };
@@ -739,13 +893,30 @@ const AppContent: React.FC = () => {
         false,
         fileName,
       );
-      if ((result as any).error) throw new Error((result as any).error);
+      const hasParsedItems =
+        Array.isArray(result.items) && result.items.length > 0;
+
+      if ((result as any).error && !hasParsedItems) {
+        throw new Error((result as any).error);
+      }
+
+      if ((result as any).error && hasParsedItems) {
+        setStatusMsg(
+          `${(result as any).error} Imported using filename-based fallback.`,
+        );
+        setStatusType("info");
+        setTimeout(() => setStatusMsg(""), 5000);
+      }
+
       return {
         items: result.items.map((res) => ({
           id: Date.now().toString() + Math.random(),
           qty: res.qty || "1",
           noOfItems: "1",
-          documentNumber: res.documentNumber || "",
+          documentNumber: resolveDocumentNumber(
+            res.documentNumber || "",
+            fileName || res.description || "",
+          ),
           description: res.description,
           remarks: res.remarks || "",
           fileType: "upload",
@@ -917,18 +1088,7 @@ const AppContent: React.FC = () => {
   const handleDriveAddSelected = () => {
     const selectedFiles = driveFiles.filter((file) => driveSelected[file.id]);
     if (selectedFiles.length === 0) return;
-    addItems(
-      selectedFiles.map((file) => ({
-        id: file.id,
-        qty: "1",
-        noOfItems: "1",
-        documentNumber: "DRIVE",
-        description: file.name.replace(/\.[^/.]+$/, ""),
-        remarks: "From Google Drive",
-        fileType: "gdrive",
-        fileSource: `https://drive.google.com/file/d/${file.id}/view`,
-      })),
-    );
+    addItems(selectedFiles.map((file) => toDriveItem(file)));
     setStatusMsg(`Added ${selectedFiles.length} Drive files.`);
     setStatusType("info");
     setTimeout(() => setStatusMsg(""), 3000);
@@ -1022,18 +1182,7 @@ const AppContent: React.FC = () => {
         }
         setStatusMsg("Listing files from folder...");
         const files = await listFilesInFolder(folderId);
-        addItems(
-          files.map((f) => ({
-            id: f.id,
-            qty: "1",
-            noOfItems: "1",
-            documentNumber: "SCAN",
-            description: f.name.replace(/\.[^/.]+$/, ""),
-            remarks: "Via Drive Folder",
-            fileType: "gdrive" as const,
-            fileSource: `https://drive.google.com/file/d/${f.id}/view`,
-          })),
-        );
+        addItems(files.map((file) => toDriveItem(file)));
         totalAdded += files.length;
 
         // Individual Drive file link
@@ -1041,18 +1190,7 @@ const AppContent: React.FC = () => {
         setStatusMsg("Fetching file info...");
         const fileId = extractFileIdFromLink(input)!;
         const meta = await getFileMetadata(fileId);
-        addItems([
-          {
-            id: meta.id,
-            qty: "1",
-            noOfItems: "1",
-            documentNumber: "DRIVE",
-            description: meta.name.replace(/\.[^/.]+$/, ""),
-            remarks: "Via Drive Link",
-            fileType: "gdrive",
-            fileSource: `https://drive.google.com/file/d/${meta.id}/view`,
-          },
-        ]);
+        addItems([toDriveItem(meta)]);
         totalAdded += 1;
       } else {
         setStatusMsg("Please paste a valid Google Drive or Sheets link.");
@@ -1388,6 +1526,7 @@ const AppContent: React.FC = () => {
               <TransmittalTemplate
                 data={data}
                 onUpdateItem={updateItem}
+                onAdjustItemQty={adjustItemQty}
                 onRemoveItem={removeItem}
                 onMoveItem={moveItem}
                 onReorderItems={handleReorderItems}

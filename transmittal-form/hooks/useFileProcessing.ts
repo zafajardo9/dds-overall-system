@@ -19,6 +19,9 @@ const readFileAsBase64 = (file: File): Promise<string> => {
     });
 };
 
+const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
 // Robust Image Resizer
 export const resizeImage = async (file: File, maxSize: number = 800): Promise<string> => {
     // 1. FAST PATH: If image is small (< 200KB), don't resize. Just return it.
@@ -144,8 +147,10 @@ export const useFileProcessing = <T>(
 
     try {
         const successfulResults: T[] = [];
-        // Increased concurrency limit for faster batch processing
-        const CONCURRENT_LIMIT = 5; 
+        // Keep parsing requests sequential to avoid bursting AI API quotas.
+        const CONCURRENT_LIMIT = 1;
+        const REQUEST_DELAY_MS = 1200;
+        const queue = [...validFiles];
         
         const processSingleFile = async (file: File) => {
             try {
@@ -172,6 +177,9 @@ export const useFileProcessing = <T>(
             } catch (err) {
                 console.error(`Error processing file ${file.name}:`, err);
             } finally {
+                if (REQUEST_DELAY_MS > 0 && queue.length > 0) {
+                    await sleep(REQUEST_DELAY_MS);
+                }
                 // Update progress regardless of success/failure
                 completedCount++;
                 setProgress({ current: completedCount, total: totalFiles });
@@ -179,7 +187,6 @@ export const useFileProcessing = <T>(
         };
 
         // Queue Execution
-        const queue = [...validFiles];
         const activeWorkers: Promise<void>[] = [];
 
         while (queue.length > 0 || activeWorkers.length > 0) {

@@ -3,6 +3,7 @@
 import React from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import { ProjectInfo } from "@/types";
 
 interface ProjectTabProps {
@@ -57,6 +58,28 @@ export const ProjectTab: React.FC<ProjectTabProps> = ({
               onUpdateField("project", "purpose", e.target.value)
             }
           />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[9px] font-black text-muted-foreground uppercase tracking-widest ml-2">
+            Department
+          </Label>
+          <div className="flex gap-2">
+            <Input
+              value={project.department}
+              onChange={(e) =>
+                onUpdateField("project", "department", e.target.value)
+              }
+              placeholder="Enter department"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onUpdateField("project", "department", "Admin")}
+              className="whitespace-nowrap"
+            >
+              Use Admin
+            </Button>
+          </div>
         </div>
       </div>
     </div>

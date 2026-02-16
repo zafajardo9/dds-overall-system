@@ -5,7 +5,24 @@
 - [DONE] Internet detector so that there will a pop up when there is no internet so user will be alerted
   - A fullscreen modal with a "No Internet Connection" message appears instantly when the browser goes offline and auto-dismisses when connectivity is restored. Rendered globally via the root layout.
 
-plan
+## PLAN
 
-- system update for google drive integration fixing
-- after export user can have a selection download in my local or upload in google drive with power of selecting the folder integrated to them. Can we do that?
+- [DONE] Dropdown for the Original Copies, Photocopies, To Sign are the choices for the dropdown
+- [DONE] Transmittal Documents should have Quantity ADD or Subtract, a Plus and Minus button so that user dont need to type but can select those button to add value or number
+  - Added +/- quantity controls directly in the table rows while still allowing manual typing. Quantity never goes below 1.
+- [DONE] Document # Reference Number should be auto generated from the BROWSE DRIVE and you need to unify the formats of it. Also the remarks should be fixed.
+  - Drive imports now auto-generate a standardized document number format and all Drive import flows use a unified remark: "Imported from Google Drive".
+
+- [DONT DO THIS] Connection and integration or merging from this stack to Firebase for server hosting and using of database that we can use, maybe removing PRISMA and converting to Firestore
+
+NOTES ni BOSS
+
+- [] For Doc/Ref #, walang format. But it should be extracted from the document number itself, eg. Official Receipts issued by the BIR - duon makukuha ung ref #. As for the remarks, meron din nilalagay ang team na note kung original, certified or photocopy ba un for transmitted na document nila
+
+btw, meron sana ako ipa fix sa iyo - ung Notary automation na ginawa ko. I think, same issue with the PCF ng accounting. Since, nag palit sa gemini ng model, need update. I will provide you link later.
+
+And meron pang isa - summary of emails (hindi na na cacapture ung accurate title ng document)
+
+You can ask Belle from receipt - regarding the Notary app, and the Summary of emails.
+
+BOth app needs to have an updated Gemini model.

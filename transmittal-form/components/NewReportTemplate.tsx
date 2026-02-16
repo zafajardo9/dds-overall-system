@@ -15,6 +15,7 @@ interface Props {
     field: keyof TransmittalItem,
     value: string,
   ) => void;
+  onAdjustItemQty: (index: number, delta: number) => void;
   onRemoveItem: (index: number) => void;
   onMoveItem: (index: number, direction: "up" | "down") => void;
   onReorderItems: (fromIndex: number, toIndex: number) => void;
@@ -213,6 +214,7 @@ const ResizableHeader = ({
 export const TransmittalTemplate: React.FC<Props> = ({
   data,
   onUpdateItem,
+  onAdjustItemQty,
   onRemoveItem,
   onMoveItem,
   onReorderItems,
@@ -492,16 +494,40 @@ export const TransmittalTemplate: React.FC<Props> = ({
                             />
                           </td>
                           <td className={cellClass}>
-                            <AutoResizeTextArea
-                              value={item.qty}
-                              onChange={
-                                isGeneratingPdf
-                                  ? undefined
-                                  : (v) => onUpdateItem(index, "qty", v)
-                              }
-                              className="text-center text-slate-800"
-                              align="center"
-                            />
+                            {isGeneratingPdf ? (
+                              <AutoResizeTextArea
+                                value={item.qty}
+                                className="text-center text-slate-800"
+                                align="center"
+                              />
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => onAdjustItemQty(index, -1)}
+                                  className="w-6 h-6 rounded-full bg-slate-700 text-white text-xs font-black flex items-center justify-center shadow-sm hover:bg-brand-600 transition-colors"
+                                  aria-label="Decrease quantity"
+                                >
+                                  -
+                                </button>
+                                <AutoResizeTextArea
+                                  value={item.qty}
+                                  onChange={(v) =>
+                                    onUpdateItem(index, "qty", v)
+                                  }
+                                  className="text-center text-slate-800"
+                                  align="center"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => onAdjustItemQty(index, 1)}
+                                  className="w-6 h-6 rounded-full bg-slate-700 text-white text-xs font-black flex items-center justify-center shadow-sm hover:bg-brand-600 transition-colors"
+                                  aria-label="Increase quantity"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            )}
                           </td>
                           <td className={cellClass}>
                             <AutoResizeTextArea
