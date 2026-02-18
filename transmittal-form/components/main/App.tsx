@@ -30,7 +30,7 @@ import {
   readSheetRows,
   extractSheetIdFromUrl,
 } from "../../services/googleSheetsService";
-import { signIn, signOut, useSession } from "../../lib/auth-client";
+import { authClient, signIn, signOut, useSession } from "../../lib/auth-client";
 import {
   AppData,
   TransmittalItem,
@@ -409,6 +409,13 @@ const AppContent: React.FC = () => {
   const handleGoogleSignIn = async () => {
     await signIn.social({
       provider: "google",
+      callbackURL: window.location.origin,
+    });
+  };
+
+  const handleDDSSignIn = async () => {
+    await authClient.signIn.oauth2({
+      providerId: "google-dds",
       callbackURL: window.location.origin,
     });
   };
@@ -1698,6 +1705,7 @@ const AppContent: React.FC = () => {
     return (
       <LoginScreen
         onGoogleSignIn={handleGoogleSignIn}
+        onDDSSignIn={handleDDSSignIn}
         authNotice={sessionErrorNotice}
       />
     );

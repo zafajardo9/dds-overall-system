@@ -2,6 +2,7 @@ import "dotenv/config";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
+import { genericOAuth } from "better-auth/plugins";
 import { PrismaClient } from "@prisma/client";
 import { withAccelerate } from "@prisma/extension-accelerate";
 
@@ -33,7 +34,31 @@ export const auth = betterAuth({
     "http://localhost:3000",
   ]),
   database: prismaAdapter(db, { provider: "postgresql" }),
-  plugins: [nextCookies()],
+  plugins: [
+    nextCookies(),
+    genericOAuth({
+      config: [
+        {
+          providerId: "google-dds",
+          clientId: process.env.GOOGLE_DDS_CLIENT_ID as string,
+          clientSecret: process.env.GOOGLE_DDS_CLIENT_SECRET as string,
+          discoveryUrl:
+            "https://accounts.google.com/.well-known/openid-configuration",
+          scopes: [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/spreadsheets",
+          ],
+          redirectURI: `${process.env.BETTER_AUTH_URL}/api/auth/callback/google-dds`,
+          accessType: "offline",
+          prompt: "select_account",
+        },
+      ],
+    }),
+  ],
   account: {
     accountLinking: {
       enabled: true,

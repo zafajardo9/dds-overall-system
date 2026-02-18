@@ -6,11 +6,13 @@ import { Button } from "@/components/ui/button";
 
 interface LoginScreenProps {
   onGoogleSignIn: () => void;
+  onDDSSignIn: () => void;
   authNotice?: string;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({
   onGoogleSignIn,
+  onDDSSignIn,
   authNotice,
 }) => {
   return (
@@ -36,30 +38,28 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         </h1>
         <p className="text-sm text-slate-500 mt-2">
           This is a private system created for the Internal Document Transmittal
-          System. Please sign in
+          System. Select your organization to sign in.
         </p>
-        <Button
-          onClick={onGoogleSignIn}
-          className="mt-8 w-full py-4 rounded-2xl bg-slate-900 text-white font-bold uppercase tracking-widest text-xs shadow-xl hover:bg-slate-800 transition-all"
-        >
-          Sign in with Google
-        </Button>
-        {/* <div className="flex justify-center gap-6 mt-6">
-          <Link
-            href="/legal/privacy-policy"
-            target="_blank"
-            className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
+
+        <div className="mt-8 flex flex-col gap-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+            Choose your organization
+          </p>
+
+          <Button
+            onClick={onGoogleSignIn}
+            className="w-full py-4 rounded-2xl bg-slate-900 text-white font-bold uppercase tracking-widest text-xs shadow-xl hover:bg-slate-700 transition-all"
           >
-            Privacy Policy
-          </Link>
-          <Link
-            href="/legal/terms-of-service"
-            target="_blank"
-            className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
+            FilePino — Sign in with Google
+          </Button>
+
+          <Button
+            onClick={onDDSSignIn}
+            className="w-full py-4 rounded-2xl bg-blue-700 text-white font-bold uppercase tracking-widest text-xs shadow-xl hover:bg-blue-600 transition-all"
           >
-            Terms of Service
-          </Link>
-        </div> */}
+            Duran &amp; Duran-Schulze — Sign in with Google
+          </Button>
+        </div>
       </div>
     </div>
   );
