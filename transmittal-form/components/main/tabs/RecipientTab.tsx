@@ -56,9 +56,8 @@ export const RecipientTab: React.FC<RecipientTabProps> = ({
             To
           </Label>
           <Input
-            className="opacity-50 cursor-not-allowed bg-slate-50"
             value={recipient.to}
-            disabled
+            onChange={(e) => onUpdateField("recipient", "to", e.target.value)}
           />
         </div>
         <div className="space-y-1">
@@ -67,7 +66,9 @@ export const RecipientTab: React.FC<RecipientTabProps> = ({
           </Label>
           <Input
             value={recipient.company}
-            onChange={(e) => onUpdateField("recipient", "company", e.target.value)}
+            onChange={(e) =>
+              onUpdateField("recipient", "company", e.target.value)
+            }
           />
         </div>
         <div className="space-y-1">
@@ -76,7 +77,9 @@ export const RecipientTab: React.FC<RecipientTabProps> = ({
           </Label>
           <Input
             value={recipient.attention}
-            onChange={(e) => onUpdateField("recipient", "attention", e.target.value)}
+            onChange={(e) =>
+              onUpdateField("recipient", "attention", e.target.value)
+            }
           />
         </div>
         <div className="space-y-1">
@@ -107,7 +110,9 @@ export const RecipientTab: React.FC<RecipientTabProps> = ({
             </Label>
             <Input
               value={recipient.email}
-              onChange={(e) => onUpdateField("recipient", "email", e.target.value)}
+              onChange={(e) =>
+                onUpdateField("recipient", "email", e.target.value)
+              }
             />
           </div>
         </div>
