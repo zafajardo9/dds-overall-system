@@ -407,8 +407,8 @@ const AppContent: React.FC = () => {
   const sessionErrorNotice = resolveSessionErrorNotice(sessionError);
 
   const handleGoogleSignIn = async () => {
-    await signIn.social({
-      provider: "google",
+    await authClient.signIn.oauth2({
+      providerId: "google",
       callbackURL: window.location.origin,
     });
   };

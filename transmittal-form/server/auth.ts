@@ -39,6 +39,26 @@ export const auth = betterAuth({
     genericOAuth({
       config: [
         {
+          providerId: "google",
+          clientId: process.env.GOOGLE_CLIENT_ID as string,
+          clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+          authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+          tokenUrl: "https://oauth2.googleapis.com/token",
+          userInfoUrl: "https://www.googleapis.com/oauth2/v3/userinfo",
+          scopes: [
+            "openid",
+            "email",
+            "profile",
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/spreadsheets",
+          ],
+          redirectURI: `${process.env.BETTER_AUTH_URL}/api/auth/callback/google`,
+          accessType: "offline",
+          prompt: "select_account",
+          pkce: false,
+        },
+        {
           providerId: "google-dds",
           clientId: process.env.GOOGLE_DDS_CLIENT_ID as string,
           clientSecret: process.env.GOOGLE_DDS_CLIENT_SECRET as string,
@@ -64,24 +84,6 @@ export const auth = betterAuth({
   account: {
     accountLinking: {
       enabled: true,
-    },
-  },
-  socialProviders: {
-    google: {
-      clientId: process.env.GOOGLE_CLIENT_ID as string,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
-      prompt: "select_account",
-      redirectURI: `${process.env.BETTER_AUTH_URL}/api/auth/callback/google`,
-      scope: [
-        "openid",
-        "email",
-        "profile",
-        "https://www.googleapis.com/auth/drive.file",
-        "https://www.googleapis.com/auth/drive.readonly",
-        "https://www.googleapis.com/auth/spreadsheets",
-      ],
-      accessType: "offline",
-      disablePkce: true,
     },
   },
 });
