@@ -42,8 +42,9 @@ export const auth = betterAuth({
           providerId: "google-dds",
           clientId: process.env.GOOGLE_DDS_CLIENT_ID as string,
           clientSecret: process.env.GOOGLE_DDS_CLIENT_SECRET as string,
-          discoveryUrl:
-            "https://accounts.google.com/.well-known/openid-configuration",
+          authorizationUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+          tokenUrl: "https://oauth2.googleapis.com/token",
+          userInfoUrl: "https://www.googleapis.com/oauth2/v3/userinfo",
           scopes: [
             "openid",
             "email",
