@@ -81,6 +81,7 @@ export const auth = betterAuth({
         "https://www.googleapis.com/auth/spreadsheets",
       ],
       accessType: "offline",
+      disablePkce: true,
     },
   },
 });
