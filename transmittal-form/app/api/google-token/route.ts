@@ -3,6 +3,23 @@ import { auth, db } from "@/server/auth";
 
 export const runtime = "nodejs";
 
+const GOOGLE_PROVIDER_IDS = ["google", "google-dds"] as const;
+type GoogleProviderId = (typeof GOOGLE_PROVIDER_IDS)[number];
+
+const getProviderCredentials = (providerId: string) => {
+  if (providerId === "google-dds") {
+    return {
+      clientId: process.env.GOOGLE_DDS_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_DDS_CLIENT_SECRET,
+    };
+  }
+
+  return {
+    clientId: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  };
+};
+
 export async function GET(request: Request) {
   try {
     const session = await auth.api.getSession({
@@ -16,14 +33,34 @@ export async function GET(request: Request) {
     const account = await db.account.findFirst({
       where: {
         userId: session.user.id,
-        providerId: "google",
+        providerId: {
+          in: [...GOOGLE_PROVIDER_IDS],
+        },
+      },
+      orderBy: {
+        updatedAt: "desc",
       },
     });
 
     if (!account) {
       return NextResponse.json(
-        { error: "No Google account linked" },
+        { error: "No Google account linked for this session" },
         { status: 404 },
+      );
+    }
+
+    const providerId = account.providerId as GoogleProviderId;
+    const credentials = getProviderCredentials(providerId);
+
+    if (!credentials.clientId || !credentials.clientSecret) {
+      return NextResponse.json(
+        {
+          error:
+            providerId === "google-dds"
+              ? "Missing GOOGLE_DDS_CLIENT_ID/GOOGLE_DDS_CLIENT_SECRET"
+              : "Missing GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET",
+        },
+        { status: 500 },
       );
     }
 
@@ -42,8 +79,8 @@ export async function GET(request: Request) {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
-            client_id: process.env.GOOGLE_CLIENT_ID!,
-            client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+            client_id: credentials.clientId,
+            client_secret: credentials.clientSecret,
             refresh_token: account.refreshToken,
             grant_type: "refresh_token",
           }),
@@ -54,7 +91,11 @@ export async function GET(request: Request) {
         const tokens = await tokenResponse.json();
 
         if (tokens.error) {
-          console.error("Token refresh error from Google:", tokens.error, tokens.error_description);
+          console.error(
+            `[${providerId}] Token refresh error from Google:`,
+            tokens.error,
+            tokens.error_description,
+          );
           return NextResponse.json(
             { error: `Google token refresh failed: ${tokens.error_description || tokens.error}` },
             { status: 401 },
@@ -80,7 +121,10 @@ export async function GET(request: Request) {
         );
       } catch (refreshErr: any) {
         clearTimeout(timeout);
-        console.error("Token refresh network error:", refreshErr.message);
+        console.error(
+          `[${providerId}] Token refresh network error:`,
+          refreshErr.message,
+        );
         return NextResponse.json(
           { error: "Network error refreshing Google token. Please try again." },
           { status: 502 },
