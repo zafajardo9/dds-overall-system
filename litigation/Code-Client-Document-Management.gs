@@ -391,6 +391,7 @@ function setupPleadingsDropdowns(sheet) {
 /**
  * UPDATED: Generate pleading name with new convention - YYYY-MM-DD Descriptive Title (no folder name).
  * Attempts AI-powered title generation via Gemini first; falls back to filename-derived title.
+ * FIXED: Strips existing date patterns from original filename to prevent duplicate dates.
  */
 function generatePleadingName(originalName, dateCreated) {
   // Format: YYYY-MM-DD
@@ -405,8 +406,30 @@ function generatePleadingName(originalName, dateCreated) {
   }
   // Fallback: Extract descriptive title from original name (remove extension and clean up)
   let descriptiveTitle = originalName.replace(/\.[^/.]+$/, ""); // Remove extension
+
+  // FIX: Strip existing date patterns to prevent duplicates like "2026-02-07 2026 02 07..."
+  // Pattern 1: YYYY-MM-DD at the start
+  descriptiveTitle = descriptiveTitle.replace(
+    /^\d{4}[-\s]\d{2}[-\s]\d{2}\s*/i,
+    "",
+  );
+  // Pattern 2: YYYY MM DD (space-separated) at the start
+  descriptiveTitle = descriptiveTitle.replace(/^\d{4}\s+\d{2}\s+\d{2}\s*/i, "");
+  // Pattern 3: Multiple consecutive date patterns
+  descriptiveTitle = descriptiveTitle.replace(
+    /(\d{4}[-\s]?\d{2}[-\s]?\d{2}\s*)+/gi,
+    "",
+  );
+  // Pattern 4: Dates in parentheses or brackets at the end like "(January 21, 2026)" - keep these as they're part of the title
+
   descriptiveTitle = descriptiveTitle.replace(/[_-]/g, " "); // Replace underscores and hyphens with spaces
   descriptiveTitle = descriptiveTitle.replace(/\s+/g, " ").trim(); // Clean up multiple spaces
+
+  // Skip if title becomes empty after stripping dates
+  if (!descriptiveTitle) {
+    descriptiveTitle = "Untitled Document";
+  }
+
   // Capitalize first letter of each word for better readability
   descriptiveTitle = descriptiveTitle
     .split(" ")
@@ -429,15 +452,15 @@ function getFileInfoEnhanced(file, folderPath, driveType, rootFolderName) {
     dateModified: file.getLastUpdated(),
     url: file.getUrl(),
     folderPath: folderPath,
-    uploadedByEmail: "Unknown",
-    lastModifiedByEmail: "Unknown",
+    uploadedByEmail: "",
+    lastModifiedByEmail: "",
     remarks: "Scanned",
   };
   // Get enhanced user information
   try {
     const userInfo = getEnhancedUserInfo(file);
-    fileInfo.uploadedByEmail = userInfo.uploadedByEmail || "Unknown";
-    fileInfo.lastModifiedByEmail = userInfo.lastModifiedByEmail || "Unknown";
+    fileInfo.uploadedByEmail = userInfo.uploadedByEmail || "";
+    fileInfo.lastModifiedByEmail = userInfo.lastModifiedByEmail || "";
     if (userInfo.uploadedByEmail || userInfo.lastModifiedByEmail) {
       console.log(
         `User tracking successful for ${file.getName()}: Upload: ${userInfo.uploadedByEmail}, Modified: ${userInfo.lastModifiedByEmail}`,
@@ -477,23 +500,36 @@ function getEnhancedUserInfo(file) {
     fromAdvancedApi: false,
   };
   try {
-    // Method 1: Advanced Drive API (most comprehensive)
+    // Method 1: Advanced Drive API with shared drive support
     try {
       const driveFile = Drive.Files.get(file.getId(), {
-        fields: "owners,lastModifyingUser,createdTime,modifiedTime",
+        fields: "owners,lastModifyingUser,sharingUser,createdTime,modifiedTime",
+        supportsAllDrives: true,
       });
 
-      // Get uploader email (owner)
-      if (driveFile.owners && driveFile.owners.length > 0) {
-        const owner = driveFile.owners[0];
-        userInfo.uploadedByEmail = owner.emailAddress || owner.displayName;
-      }
-
-      // Get last modifier email
+      // Get last modifier email (always available, even on shared drives)
       if (driveFile.lastModifyingUser) {
         userInfo.lastModifiedByEmail =
           driveFile.lastModifyingUser.emailAddress ||
-          driveFile.lastModifyingUser.displayName;
+          driveFile.lastModifyingUser.displayName ||
+          null;
+      }
+
+      // Get uploader: owners array is empty for shared drive files,
+      // so fall back to sharingUser (the person who added the file),
+      // then to lastModifyingUser as last resort.
+      if (driveFile.owners && driveFile.owners.length > 0) {
+        const owner = driveFile.owners[0];
+        userInfo.uploadedByEmail =
+          owner.emailAddress || owner.displayName || null;
+      } else if (driveFile.sharingUser) {
+        userInfo.uploadedByEmail =
+          driveFile.sharingUser.emailAddress ||
+          driveFile.sharingUser.displayName ||
+          null;
+      } else if (userInfo.lastModifiedByEmail) {
+        // Last resort: use the last modifier as the uploader
+        userInfo.uploadedByEmail = userInfo.lastModifiedByEmail;
       }
 
       userInfo.fromAdvancedApi = true;
@@ -502,28 +538,19 @@ function getEnhancedUserInfo(file) {
         `Advanced Drive API failed for ${file.getName()}: ${apiError.message}`,
       );
 
-      // Method 2: Standard DriveApp methods (fallback)
+      // Method 2: Standard DriveApp methods (fallback for non-shared drives)
       try {
         const owners = file.getOwners();
         if (owners && owners.length > 0) {
           const owner = owners[0];
-          userInfo.uploadedByEmail = owner.getEmail() || owner.getName();
+          userInfo.uploadedByEmail =
+            owner.getEmail() || owner.getName() || null;
+          userInfo.lastModifiedByEmail = userInfo.uploadedByEmail;
         }
-
-        userInfo.lastModifiedByEmail = userInfo.uploadedByEmail;
       } catch (standardError) {
         console.log(
           `Standard DriveApp methods failed for ${file.getName()}: ${standardError.message}`,
         );
-
-        // Method 3: Domain-based inference (last resort)
-        if (CONFIG.DOMAIN) {
-          const fileName = file.getName();
-          if (fileName.includes(CONFIG.DOMAIN)) {
-            userInfo.uploadedByEmail = "Domain User";
-            userInfo.lastModifiedByEmail = "Domain User";
-          }
-        }
       }
     }
   } catch (error) {
@@ -610,10 +637,11 @@ function addFileToPleadingsSheet(fileInfo) {
       defaultActionNeeded = "No Action Needed"; // Use new dropdown option
       defaultStatus = "Completed";
     }
+    // FIXED: File Name is plain text, File URL has "View File" hyperlink
     const rowData = [
       fileInfo.dateCreated,
-      `=HYPERLINK("${fileInfo.url}","${finalDisplayName}")`,
-      fileInfo.folderPath,
+      finalDisplayName, // Plain filename text
+      `=HYPERLINK("${fileInfo.url}","View File")`, // File URL with "View File" link
       defaultFiledBy,
       fileInfo.uploadedByEmail,
       fileInfo.lastModifiedByEmail,
@@ -799,16 +827,22 @@ function findExistingRowByFileId(sheet, fileId) {
 
 /**
  * Update existing pleading name in sheet
+ * FIXED: Column 2 = plain filename, Column 3 = "View File" hyperlink
  */
 function updateExistingPleadingName(sheet, rowIndex, newName, fileId) {
   try {
     // Get the current file URL
     const file = DriveApp.getFileById(fileId);
     const fileUrl = file.getUrl();
-    // Update the hyperlink with new name
-    const newHyperlink = `=HYPERLINK("${fileUrl}","${newName}")`;
-    sheet.getRange(rowIndex, 2).setValue(newHyperlink); // Column 2 is File Name
-    console.log(`Updated sheet display name at row ${rowIndex}: ${newName}`);
+    // Update Column 2 with plain filename (no hyperlink)
+    sheet.getRange(rowIndex, 2).setValue(newName);
+    // Update Column 3 with "View File" hyperlink
+    sheet
+      .getRange(rowIndex, 3)
+      .setValue(`=HYPERLINK("${fileUrl}","View File")`);
+    console.log(
+      `Updated sheet at row ${rowIndex}: Name="${newName}", URL=View File link`,
+    );
   } catch (error) {
     console.log(`Error updating sheet display name: ${error.message}`);
     logEvent(
@@ -834,8 +868,8 @@ function addFileToClientDocsSheet(fileInfo, remarks) {
     );
     const rowData = [
       fileInfo.dateCreated,
-      `=HYPERLINK("${fileInfo.url}","${fileInfo.name}")`,
-      fileInfo.folderPath,
+      fileInfo.name,
+      `=HYPERLINK("${fileInfo.url}","View File")`,
       fileInfo.uploadedByEmail,
       fileInfo.dateModified,
       fileInfo.lastModifiedByEmail,
@@ -844,7 +878,7 @@ function addFileToClientDocsSheet(fileInfo, remarks) {
     ];
     sheet.appendRow(rowData);
     // Log user activity
-    if (fileInfo.uploadedByEmail !== "Unknown") {
+    if (fileInfo.uploadedByEmail) {
       logEvent(
         "FILE_ADDED",
         CONFIG.DRIVE_TYPES.CLIENT_DOCS,

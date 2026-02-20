@@ -1,31 +1,3 @@
-PLANS FOR TWEAK OR UPDATES:
-- adding a api key modal for user encode
-- adding a gemini model view for them to select what AI model they will be using where we need to also add a highlight to the latest one needed for the system.
-    - use the https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_API_KEY for fetching list of AI model lists for gemini
-    - will be used so that any gmeini model the user will pick the api will still be working. 
-- making sure that the system or the appscript will continuously work without editing always the code. another 
-- A log sheet to display any errors that the system will encounter so that the user that will run the appscript will use that report for reporting to the developer.
+- when the full scan for the pleadig we will refix something in the naming, I can see some files become like 2026-02-07 2026 02 07 2026 02 07 2026 02 05 Motion For Correction Of Transcript Of Stenographic Notes Dated 5 November 2025” & "motion For Reconsideration (of The Order Dated January 21, 2026) [verna Weeks Bunao] or have too long duplicate of date, can we make that the logic will never do that kind of behaviour in renaming the file.
 
-- Testing should diagnose the systems integration with gemini ai model and if it really is working. 
-
-``` 
-REST
-
-curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent" \
-  -H "x-goog-api-key: $GEMINI_API_KEY" \
-  -H 'Content-Type: application/json' \
-  -X POST \
-  -d '{
-    "contents": [
-      {
-        "parts": [
-          {
-            "text": "Explain how AI works in a few words"
-          }
-        ]
-      }
-    ]
-  }'
-
-```
-
+- File URL will have the File link with a text of "View File" and the File name will just have the file name
