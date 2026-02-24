@@ -43,6 +43,7 @@ import * as mammoth from "mammoth";
 import {
   parseTransmittalDocument,
   ParseResult,
+  resolveDocumentNumberWithFallback,
 } from "../../services/geminiService";
 
 type ParsedDocumentResponse = ParseResult;
@@ -182,58 +183,6 @@ const isDriveFileAnalyzable = (file: DriveFileMeta): boolean => {
   return DRIVE_ANALYZABLE_EXTENSION_PATTERN.test(file.name || "");
 };
 
-const deriveDocumentNumberFromFileName = (fileName: string): string => {
-  const baseName = stripFileExtension(fileName);
-  if (!baseName) return "";
-
-  const labeledMatch = baseName.match(
-    /\b(?:doc(?:ument)?|ref(?:erence)?|control|transmittal|invoice|inv|po|soa|official\s*receipt|cv|cert(?:ificate)?)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-_/]{2,})\b/i,
-  );
-  if (labeledMatch?.[1]) {
-    return labeledMatch[1].toUpperCase();
-  }
-
-  const tokenMatches =
-    baseName.match(/\b[A-Za-z0-9]+(?:[-_/][A-Za-z0-9]+)*\b/g) || [];
-
-  for (const token of tokenMatches) {
-    const cleanToken = token.replace(/^[-_/]+|[-_/]+$/g, "");
-    if (cleanToken.length < 4) continue;
-    if (!/[A-Za-z]/.test(cleanToken) || !/\d/.test(cleanToken)) continue;
-    return cleanToken.toUpperCase();
-  }
-
-  return "";
-};
-
-const resolveDocumentNumber = (
-  currentDocumentNumber: string,
-  sourceName: string,
-): string => {
-  const current = currentDocumentNumber.trim();
-  const normalizedCurrent = current
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-  const isGenericValue = [
-    "scan",
-    "drive",
-    "google drive",
-    "bulk import",
-    "browse drive",
-    "from google drive",
-    "via drive folder",
-    "via drive link",
-  ].includes(normalizedCurrent);
-
-  if (current && !isGenericValue) {
-    return current;
-  }
-
-  const derived = deriveDocumentNumberFromFileName(sourceName);
-  return derived || (isGenericValue ? "" : current);
-};
-
 const normalizeAutoDocumentNumber = (value: string): string =>
   value
     .toUpperCase()
@@ -246,7 +195,11 @@ const createDriveDocumentNumber = (file: {
   name: string;
 }): string => {
   const resolved = normalizeAutoDocumentNumber(
-    resolveDocumentNumber("", file.name),
+    resolveDocumentNumberWithFallback({
+      sourceName: file.name,
+      description: stripFileExtension(file.name) || file.name,
+      documentType: "File",
+    }),
   );
   if (resolved) return resolved;
 
@@ -575,10 +528,12 @@ const AppContent: React.FC = () => {
             id: item.id,
             qty: item.qty || "",
             noOfItems: item.noOfItems || "",
-            documentNumber: resolveDocumentNumber(
-              item.documentNumber || "",
-              item.description || "",
-            ),
+            documentNumber: resolveDocumentNumberWithFallback({
+              currentDocumentNumber: item.documentNumber || "",
+              sourceName: item.description || "",
+              description: item.description || "",
+              documentType: item.documentType || "",
+            }),
             description: item.description || "",
             remarks: item.remarks || "",
             fileType: item.fileType || undefined,
@@ -795,10 +750,12 @@ const AppContent: React.FC = () => {
   ): TransmittalItem[] => {
     const fallbackDescription = stripFileExtension(file.name) || file.name;
     return parsedItems.map((res, index) => {
-      const resolvedDocumentNumber = resolveDocumentNumber(
-        res.documentNumber || "",
-        file.name || res.description || "",
-      );
+      const resolvedDocumentNumber = resolveDocumentNumberWithFallback({
+        currentDocumentNumber: res.documentNumber || "",
+        sourceName: file.name || "",
+        description: res.description || fallbackDescription,
+        documentType: res.documentType || "File",
+      });
       return {
         id: `${file.id}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
         qty: String(res.qty || "1").trim() || "1",
@@ -840,7 +797,8 @@ const AppContent: React.FC = () => {
         return { items: [toDriveItem(file)], usedFallback: true };
       }
 
-      const usedFallback = Boolean(result.error);
+      const usedFallback =
+        Boolean(result.error) || Number(result.fallbackCount || 0) > 0;
       return {
         items: mapAnalyzedDriveItems(file, parsedItems, usedFallback),
         usedFallback,
@@ -950,7 +908,7 @@ const AppContent: React.FC = () => {
 
       setStatusMsg(
         fallbackCount > 0
-          ? `Imported ${addedCount} item(s) from ${files.length} file(s). Filename fallback was used for ${fallbackCount} file(s).`
+          ? `Imported ${addedCount} item(s) from ${files.length} file(s). Document # fallback was used for ${fallbackCount} file(s).`
           : `Imported ${addedCount} item(s) from ${files.length} file(s) using AI extraction.`,
       );
       setStatusType("info");
@@ -1049,17 +1007,12 @@ const AppContent: React.FC = () => {
       );
       const hasParsedItems =
         Array.isArray(result.items) && result.items.length > 0;
+      const usedFallback =
+        Boolean((result as any).error) ||
+        Number((result as any).fallbackCount || 0) > 0;
 
       if ((result as any).error && !hasParsedItems) {
         throw new Error((result as any).error);
-      }
-
-      if ((result as any).error && hasParsedItems) {
-        setStatusMsg(
-          `${(result as any).error} Imported using filename-based fallback.`,
-        );
-        setStatusType("info");
-        setTimeout(() => setStatusMsg(""), 5000);
       }
 
       return {
@@ -1067,15 +1020,22 @@ const AppContent: React.FC = () => {
           id: Date.now().toString() + Math.random(),
           qty: res.qty || "1",
           noOfItems: "1",
-          documentNumber: resolveDocumentNumber(
-            res.documentNumber || "",
-            fileName || res.description || "",
-          ),
+          documentNumber: resolveDocumentNumberWithFallback({
+            currentDocumentNumber: res.documentNumber || "",
+            sourceName: fileName || "",
+            description:
+              res.description ||
+              stripFileExtension(fileName || "") ||
+              fileName ||
+              "",
+            documentType: res.documentType || "File",
+          }),
           description: res.description,
           remarks: res.remarks || "",
           fileType: "upload",
         })),
         header: result.header,
+        usedFallback,
       };
     },
     ["application/pdf", "image/*"],
@@ -1283,26 +1243,48 @@ const AppContent: React.FC = () => {
     }
   };
 
-  const handleBatchUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = (e.target.files ? Array.from(e.target.files) : []) as File[];
+  const processUploadedFiles = async (files: File[]) => {
     if (files.length === 0) return;
-    processDocs(files, (result) => {
+
+    const results = await processDocs(files, (result) => {
       if (result && result.items) {
         addItems(result.items);
         if (result.header) mergeHeaderData(result.header);
       }
     });
+
+    if (!results || results.length === 0) return;
+
+    const addedCount = results.reduce(
+      (total, result) =>
+        total + (Array.isArray(result?.items) ? result.items.length : 0),
+      0,
+    );
+    const fallbackCount = results.filter(
+      (result) => result?.usedFallback,
+    ).length;
+
+    if (addedCount <= 0) return;
+
+    setStatusMsg(
+      fallbackCount > 0
+        ? `Imported ${addedCount} item(s) from ${results.length} uploaded file(s). Document # fallback was used for ${fallbackCount} file(s).`
+        : `Imported ${addedCount} item(s) from ${results.length} uploaded file(s) using AI extraction.`,
+    );
+    setStatusType("info");
+    setTimeout(() => setStatusMsg(""), 5000);
+  };
+
+  const handleBatchUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = (e.target.files ? Array.from(e.target.files) : []) as File[];
     e.target.value = "";
+    if (files.length === 0) return;
+    void processUploadedFiles(files);
   };
 
   const handleUploadFiles = (files: File[]) => {
     if (files.length === 0) return;
-    processDocs(files, (result) => {
-      if (result && result.items) {
-        addItems(result.items);
-        if (result.header) mergeHeaderData(result.header);
-      }
-    });
+    void processUploadedFiles(files);
   };
 
   const loadDriveFiles = async (query?: string) => {
@@ -1357,7 +1339,7 @@ const AppContent: React.FC = () => {
 
       setStatusMsg(
         fallbackCount > 0
-          ? `Added ${addedCount} item(s) from ${selectedFiles.length} selected file(s). Filename fallback was used for ${fallbackCount} file(s).`
+          ? `Added ${addedCount} item(s) from ${selectedFiles.length} selected file(s). Document # fallback was used for ${fallbackCount} file(s).`
           : `Added ${addedCount} item(s) from ${selectedFiles.length} selected file(s) using AI extraction.`,
       );
       setStatusType("info");
@@ -1488,7 +1470,7 @@ const AppContent: React.FC = () => {
         setSmartInput("");
         setStatusMsg(
           fallbackCount > 0
-            ? `Imported ${totalAdded} item(s). Filename fallback was used for ${fallbackCount} file(s).`
+            ? `Imported ${totalAdded} item(s). Document # fallback was used for ${fallbackCount} file(s).`
             : `Imported ${totalAdded} item(s) using AI extraction.`,
         );
         setStatusType("info");
@@ -1666,6 +1648,23 @@ const AppContent: React.FC = () => {
     setTimeout(() => setStatusMsg(""), 5000);
   };
 
+  useEffect(() => {
+    const onSaveShortcut = (event: KeyboardEvent) => {
+      const isSaveShortcut =
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "s" &&
+        !event.repeat;
+
+      if (!isSaveShortcut) return;
+
+      event.preventDefault();
+      void handleSaveTransmittal();
+    };
+
+    window.addEventListener("keydown", onSaveShortcut);
+    return () => window.removeEventListener("keydown", onSaveShortcut);
+  }, [handleSaveTransmittal]);
+
   const handleSendEmail = () => {
     if (!data.recipient.email) {
       setStatusMsg("Add Recipient Email first.");
@@ -1687,6 +1686,27 @@ const AppContent: React.FC = () => {
 
   const isDocumentProcessing =
     isParsing || isBulkImporting || isDriveSelectionImporting;
+
+  const hasFormData =
+    data.items.length > 0 ||
+    [
+      data.recipient.to,
+      data.recipient.email,
+      data.recipient.company,
+      data.recipient.attention,
+      data.recipient.address,
+      data.recipient.contactNumber,
+      data.project.projectName,
+      data.project.projectNumber,
+      data.project.engagementRef,
+      data.project.purpose,
+      data.project.transmittalNumber,
+      data.notes,
+      data.receivedBy.name,
+      data.receivedBy.date,
+      data.receivedBy.time,
+      data.receivedBy.remarks,
+    ].some((value) => String(value || "").trim().length > 0);
 
   const documentProcessingStatus = isParsing
     ? parseProgress.total > 0
@@ -1858,6 +1878,7 @@ const AppContent: React.FC = () => {
           onZoomReset={handleZoomReset}
           onZoomSet={handleZoomSet}
           transmittalNumber={data.project.transmittalNumber}
+          showSaveNotice={hasFormData}
         />
         <div className="flex-1 overflow-y-auto overflow-x-hidden w-full flex flex-col items-center p-4 lg:p-8 pt-0">
           <div

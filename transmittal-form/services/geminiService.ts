@@ -77,7 +77,15 @@ export interface ParseResult {
         projectNumber?: string;
         purpose?: string;
     };
-    error?: string; 
+    error?: string;
+    fallbackCount?: number;
+}
+
+export interface DocumentNumberResolutionInput {
+    currentDocumentNumber?: string | null;
+    sourceName?: string | null;
+    description?: string | null;
+    documentType?: string | null;
 }
 
 // --- Helper: Generate Smart Placeholder for Missing IDs ---
@@ -108,6 +116,261 @@ const generateSmartPlaceholder = (type: string, description: string, filename: s
 const stripFileExtension = (value: string): string =>
     value.replace(/\.[^/.]+$/, "").trim();
 
+const GENERIC_DOCUMENT_NUMBER_VALUES = new Set([
+    "scan",
+    "scanned",
+    "file",
+    "document",
+    "documents",
+    "google drive",
+    "drive",
+    "bulk import",
+    "browse drive",
+    "from google drive",
+    "via drive folder",
+    "via drive link",
+    "doc",
+    "doc no",
+    "document no",
+    "document number",
+    "reference",
+    "reference no",
+    "reference number",
+    "ref",
+    "ref no",
+    "control",
+    "control no",
+    "control number",
+    "number",
+    "id",
+    "identifier",
+    "official receipt",
+    "invoice",
+    "receipt",
+    "certificate",
+    "transmittal",
+    "n a",
+    "na",
+    "none",
+    "null",
+    "nil",
+    "unknown",
+    "not available",
+    "not found",
+    "tbd",
+    "to be determined",
+    "pending",
+]);
+
+type WeakCandidateContext = {
+    sourceName?: string | null;
+    description?: string | null;
+};
+
+const normalizeComparableText = (value: string): string =>
+    value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+
+const sanitizeDocumentNumberCandidate = (value: string): string => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+
+    let cleaned = raw
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/[–—]/g, "-")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    cleaned = cleaned.replace(/^([\[\(\{\"'])+|([\]\)\}\"'])+$/g, "").trim();
+    cleaned = cleaned.replace(
+        /^(?:doc(?:ument)?|ref(?:erence)?|control|transmittal|invoice|inv|official\s*receipt|receipt|voucher|cv|po|soa|cert(?:ificate)?|title|tax\s*declaration|td|e\s*car|ecar|no\.?|number)\s*(?:no\.?|number|#)?\s*[:\-]\s*/i,
+        "",
+    );
+    cleaned = cleaned.replace(/[.,;:]+$/g, "").trim();
+
+    return cleaned.toUpperCase();
+};
+
+const isLikelyDateToken = (value: string): boolean => {
+    const normalized = value.replace(/[._]/g, "-").trim();
+    if (!normalized) return false;
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return true;
+    if (/^\d{2}-\d{2}-\d{4}$/.test(normalized)) return true;
+    if (/^\d{8}$/.test(normalized)) return true;
+
+    if (/^\d{4}$/.test(normalized)) {
+        const year = Number(normalized);
+        return year >= 1900 && year <= 2100;
+    }
+
+    return false;
+};
+
+const isWeakDocumentNumberCandidate = (
+    value: string,
+    context: WeakCandidateContext = {},
+): boolean => {
+    const candidate = sanitizeDocumentNumberCandidate(value);
+    if (!candidate) return true;
+
+    const comparable = normalizeComparableText(candidate);
+    if (!comparable) return true;
+    if (GENERIC_DOCUMENT_NUMBER_VALUES.has(comparable)) return true;
+
+    if (/\b(?:unable|cannot|could not|not\s+(?:provided|available|found|indicated|specified))\b/.test(comparable)) {
+        return true;
+    }
+
+    if (/^(?:https?:\/\/|www\.)/i.test(candidate)) return true;
+    if (candidate.length > 80) return true;
+
+    const hasDigit = /\d/.test(candidate);
+    const hasStructuredSeparator = /[-_/]/.test(candidate);
+    const words = comparable.split(" ").filter(Boolean).length;
+
+    if (!hasDigit && !hasStructuredSeparator && words >= 4) return true;
+    if (!hasDigit && !hasStructuredSeparator && candidate.length <= 2) return true;
+
+    const comparableSource = normalizeComparableText(
+        stripFileExtension(String(context.sourceName || "")),
+    );
+    if (
+        comparableSource &&
+        comparable === comparableSource &&
+        !hasDigit &&
+        !hasStructuredSeparator &&
+        words >= 3
+    ) {
+        return true;
+    }
+
+    return false;
+};
+
+const extractLabeledIdentifier = (text: string): string => {
+    const source = String(text || "");
+    if (!source) return "";
+
+    const pattern =
+        /\b(?:doc(?:ument)?|ref(?:erence)?|control|transmittal|invoice|inv|official\s*receipt|or|receipt|voucher|cv|po|soa|cert(?:ificate)?|title|tax\s*declaration|td|e\s*car|ecar)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-_/]{1,})\b/gi;
+
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source))) {
+        const candidate = sanitizeDocumentNumberCandidate(match[1] || "");
+        if (!candidate || isLikelyDateToken(candidate)) continue;
+        if (!isWeakDocumentNumberCandidate(candidate, { sourceName: source })) {
+            return candidate;
+        }
+    }
+
+    return "";
+};
+
+const extractTokenIdentifier = (text: string): string => {
+    const source = String(text || "");
+    if (!source) return "";
+
+    const tokens =
+        source.match(/\b[A-Za-z0-9]+(?:[-_/][A-Za-z0-9]+)*\b/g) || [];
+
+    for (const token of tokens) {
+        const cleanToken = token.replace(/^[-_/]+|[-_/]+$/g, "");
+        if (cleanToken.length < 4) continue;
+
+        const hasLetters = /[A-Za-z]/.test(cleanToken);
+        const hasDigits = /\d/.test(cleanToken);
+        const hasSeparator = /[-_/]/.test(cleanToken);
+
+        if (!(hasDigits && (hasLetters || hasSeparator))) continue;
+        if (isLikelyDateToken(cleanToken)) continue;
+
+        const candidate = sanitizeDocumentNumberCandidate(cleanToken);
+        if (!isWeakDocumentNumberCandidate(candidate, { sourceName: source })) {
+            return candidate;
+        }
+    }
+
+    for (const token of tokens) {
+        const cleanToken = token.replace(/^[-_/]+|[-_/]+$/g, "");
+        if (!/^\d{5,}$/.test(cleanToken)) continue;
+        if (isLikelyDateToken(cleanToken)) continue;
+
+        const candidate = sanitizeDocumentNumberCandidate(cleanToken);
+        if (!isWeakDocumentNumberCandidate(candidate, { sourceName: source })) {
+            return candidate;
+        }
+    }
+
+    return "";
+};
+
+const extractIdentifierFromText = (text: string): string => {
+    const fromLabel = extractLabeledIdentifier(text);
+    if (fromLabel) return fromLabel;
+
+    return extractTokenIdentifier(text);
+};
+
+export const resolveDocumentNumberWithFallback = ({
+    currentDocumentNumber,
+    sourceName,
+    description,
+    documentType,
+}: DocumentNumberResolutionInput): string => {
+    const safeSourceName = String(sourceName || "").trim();
+    const safeDescription = String(description || "").trim();
+    const safeDocumentType = String(documentType || "").trim() || "File";
+
+    const current = sanitizeDocumentNumberCandidate(
+        String(currentDocumentNumber || ""),
+    );
+    if (
+        current &&
+        !isWeakDocumentNumberCandidate(current, {
+            sourceName: safeSourceName,
+            description: safeDescription,
+        })
+    ) {
+        return current;
+    }
+
+    const sourceBase = stripFileExtension(safeSourceName);
+    const textCandidates = [safeSourceName, sourceBase, safeDescription].filter(
+        Boolean,
+    );
+
+    for (const text of textCandidates) {
+        const extracted = extractIdentifierFromText(text);
+        if (extracted) return extracted;
+    }
+
+    const filenameDerived = sanitizeDocumentNumberCandidate(
+        generateSmartPlaceholder(
+            safeDocumentType,
+            safeDescription || sourceBase || safeSourceName || "Document",
+            safeSourceName || safeDescription || "Uploaded Document",
+        ),
+    );
+    if (
+        filenameDerived &&
+        !isWeakDocumentNumberCandidate(filenameDerived, {
+            sourceName: safeSourceName,
+            description: safeDescription,
+        })
+    ) {
+        return filenameDerived;
+    }
+
+    const deterministic = sanitizeDocumentNumberCandidate(
+        generateSmartPlaceholder(safeDocumentType, "Document", "Uploaded Document"),
+    );
+    return deterministic || "DOC-PENDING";
+};
+
 const resolveGeminiApiKey = (): string => {
     return (
         process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
@@ -125,23 +388,30 @@ const resolveGeminiModel = (): string => {
 const buildFallbackParseResult = (fileName?: string, remarks: string = ""): ParseResult => {
     const safeFileName = (fileName || "Uploaded Document").trim();
     const description = stripFileExtension(safeFileName) || safeFileName;
+    const documentNumber = resolveDocumentNumberWithFallback({
+        sourceName: safeFileName,
+        description,
+        documentType: "File",
+    });
 
     return {
         items: [{
             description,
-            documentNumber: generateSmartPlaceholder("File", description, safeFileName),
+            documentNumber,
             qty: "1",
             remarks,
             documentType: "File",
         }],
+        fallbackCount: 1,
     };
 };
 
 // --- ROBUST LOCAL PARSER (Fallback) ---
 const parseWithRegex = (content: string): ParseResult => {
     const lines = content.split(/\r?\n/);
-    const cleanedItems: Array<any> = [];
+    const cleanedItems: ParseResult["items"] = [];
     const seenDescriptions = new Set<string>();
+    let fallbackCount = 0;
     
     for (let line of lines) {
         line = line.trim();
@@ -150,17 +420,23 @@ const parseWithRegex = (content: string): ParseResult => {
         if (/^(me|owner|file size|name|folders)$/i.test(line)) continue;
 
         if (!seenDescriptions.has(line)) {
+            const documentNumber = resolveDocumentNumberWithFallback({
+                sourceName: line,
+                description: line,
+                documentType: "File",
+            });
             cleanedItems.push({
                 description: line,
-                documentNumber: generateSmartPlaceholder("File", line, line),
+                documentNumber,
                 qty: "1",
                 remarks: "",
                 documentType: "File"
             });
+            fallbackCount += 1;
             seenDescriptions.add(line);
         }
     }
-    return { items: cleanedItems };
+    return { items: cleanedItems, fallbackCount };
 };
 
 /**
@@ -228,22 +504,34 @@ export const parseTransmittalDocument = async (
 
     if (data && (data.items || data.extractedHeader)) {
         const items = Array.isArray(data.items) ? data.items : [];
+        let fallbackCount = 0;
 
         const processedItems = items.map((item: any) => {
-            if (!item.documentNumber || item.documentNumber.trim() === "") {
-                const smartId = generateSmartPlaceholder(
-                    item.documentType || "", 
-                    item.description || "", 
-                    fileName || item.originalFilename || ""
-                );
-                return { ...item, documentNumber: smartId };
+            const sourceName = fileName || item.originalFilename || "";
+            const description = item.description || "";
+            const currentDocumentNumber = String(item.documentNumber || "");
+            const shouldFallback = isWeakDocumentNumberCandidate(currentDocumentNumber, {
+                sourceName,
+                description,
+            });
+            const documentNumber = resolveDocumentNumberWithFallback({
+                currentDocumentNumber,
+                sourceName,
+                description,
+                documentType: item.documentType || "",
+            });
+
+            if (shouldFallback) {
+                fallbackCount += 1;
             }
-            return item;
+
+            return { ...item, documentNumber };
         });
 
         return {
             items: processedItems,
-            header: data.extractedHeader || undefined
+            header: data.extractedHeader || undefined,
+            fallbackCount: fallbackCount > 0 ? fallbackCount : undefined,
         };
     }
     

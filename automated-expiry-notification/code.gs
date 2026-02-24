@@ -11,6 +11,7 @@
 var CONFIG = {
   SHEET_NAME: "VISA automation",
   LOGS_SHEET_NAME: "LOGS",
+  AUTOMATION_SHEET_PROPERTY_KEY: "AUTOMATION_SHEET_NAME",
   HEADER_ROW: 2, // Row containing column headers
   DATA_START_ROW: 3, // First row of actual data
   TRIGGER_HOUR: 8, // 8 AM daily trigger
@@ -19,6 +20,7 @@ var CONFIG = {
 
 // Expected header names — must match row 2 of the sheet (case-insensitive trim)
 var HEADERS = {
+  NO: "No.",
   CLIENT_NAME: "Client Name",
   CLIENT_EMAIL: "Client Email",
   DOC_TYPE: "Type of ID/Document",
@@ -27,7 +29,12 @@ var HEADERS = {
   REMARKS: "Remarks",
   ATTACHMENTS: "Attached Files",
   STATUS: "Status",
-  STAFF_EMAIL: "Assigned Staff Email",
+  STAFF_EMAIL: "Staff Email",
+};
+
+// Optional accepted header aliases (mapped to the same logical field key)
+var HEADER_ALIASES = {
+  STAFF_EMAIL: ["Assigned Staff Email"],
 };
 
 // Status values
@@ -55,15 +62,225 @@ var LOG_COL = {
  * Adds the "Expiry Notifications" menu to the menu bar.
  */
 function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu("Expiry Notifications")
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu("Expiry Notifications")
+    .addItem("Show Automation Status", "showAutomationStatus")
+    .addItem("Initialize / Select Working Sheet", "initializeAutomationSheet")
     .addItem("Run Manual Check Now", "manualRunNow")
     .addSeparator()
+    .addItem("Check Schedule Status", "checkScheduleStatus")
     .addItem("Activate Daily Schedule (8 AM)", "installTrigger")
     .addItem("Deactivate Daily Schedule", "removeTrigger")
     .addSeparator()
-    .addItem("Preview Target Dates (no emails sent)", "previewTargetDates")
+    .addSubMenu(
+      ui
+        .createMenu("Diagnostics")
+        .addItem("Preview Target Dates (no emails sent)", "previewTargetDates")
+        .addItem("Inspect Row...", "diagnosticInspectRow")
+        .addItem("Send Test Email by No....", "diagnosticSendTestRow"),
+    )
     .addToUi();
+}
+
+/**
+ * Menu alias for a more obvious status entry point.
+ */
+function showAutomationStatus() {
+  checkScheduleStatus();
+}
+
+/**
+ * One-time/anytime setup utility to select which sheet tab the automation should use.
+ * Stores selection in document properties so tab renames can be reconfigured quickly.
+ */
+function initializeAutomationSheet() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets().filter(function (sheet) {
+    return sheet.getName() !== CONFIG.LOGS_SHEET_NAME;
+  });
+
+  if (sheets.length === 0) {
+    ui.alert(
+      "Initialization",
+      "No selectable sheet tabs were found.",
+      ui.ButtonSet.OK,
+    );
+    return;
+  }
+
+  var currentSheetName = getConfiguredSheetName();
+  var options = [];
+  for (var i = 0; i < sheets.length; i++) {
+    options.push(i + 1 + ". " + sheets[i].getName());
+  }
+
+  var response = ui.prompt(
+    "Initialize Automation Sheet",
+    'Select sheet tab by number (or type exact tab name):\n\nCurrent: "' +
+      currentSheetName +
+      '"\n\n' +
+      options.join("\n"),
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+
+  var input = response.getResponseText().trim();
+  if (!input) {
+    ui.alert("Invalid input. Please enter a number or tab name.");
+    return;
+  }
+
+  var index = parseInt(input, 10);
+  var selectedSheetName = "";
+  if (
+    !isNaN(index) &&
+    String(index) === input &&
+    index >= 1 &&
+    index <= sheets.length
+  ) {
+    selectedSheetName = sheets[index - 1].getName();
+  } else {
+    selectedSheetName = input;
+  }
+
+  var selectedSheet = ss.getSheetByName(selectedSheetName);
+  if (!selectedSheet) {
+    ui.alert(
+      'Sheet "' + selectedSheetName + '" was not found. Please try again.',
+    );
+    return;
+  }
+
+  setConfiguredSheetName(selectedSheetName);
+  ui.alert(
+    "Initialization Complete",
+    'Automation will now use sheet tab: "' + selectedSheetName + '".',
+    ui.ButtonSet.OK,
+  );
+}
+
+/**
+ * Gets the selected automation sheet name from properties, falling back to CONFIG default.
+ */
+function getConfiguredSheetName() {
+  var props = PropertiesService.getDocumentProperties();
+  var saved = props.getProperty(CONFIG.AUTOMATION_SHEET_PROPERTY_KEY);
+  return saved ? saved.trim() : CONFIG.SHEET_NAME;
+}
+
+/**
+ * Persists automation sheet selection to document properties.
+ */
+function setConfiguredSheetName(sheetName) {
+  var value = String(sheetName || "").trim();
+  if (!value) return;
+  PropertiesService.getDocumentProperties().setProperty(
+    CONFIG.AUTOMATION_SHEET_PROPERTY_KEY,
+    value,
+  );
+}
+
+/**
+ * Resolves configured automation sheet and returns both name and Sheet object.
+ */
+function resolveAutomationSheet(ss) {
+  var sheetName = getConfiguredSheetName();
+  return {
+    sheetName: sheetName,
+    sheet: ss.getSheetByName(sheetName),
+  };
+}
+
+/**
+ * Shows whether the daily schedule is currently active and when it will next run.
+ */
+function checkScheduleStatus() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetConfig = resolveAutomationSheet(ss);
+  var logsSheet = ensureLogsSheet(ss);
+  var triggers = ScriptApp.getProjectTriggers();
+  var active = [];
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "runDailyCheck") {
+      active.push(triggers[i]);
+    }
+  }
+
+  var msg;
+  if (active.length === 0) {
+    msg =
+      "Status: INACTIVE\n\nNo daily schedule is set up.\nUse 'Activate Daily Schedule (8 AM)' to enable it.";
+  } else {
+    var lines = ["Status: ACTIVE", "", active.length + " trigger(s) found:"];
+    for (var j = 0; j < active.length; j++) {
+      var t = active[j];
+      lines.push(
+        "  - Runs daily at " +
+          CONFIG.TRIGGER_HOUR +
+          ":00 Philippine Time (Asia/Manila)",
+      );
+    }
+    if (active.length > 1) {
+      lines.push("");
+      lines.push(
+        "Warning: " +
+          active.length +
+          " duplicate triggers detected. Run 'Deactivate' then 'Activate' to clean up.",
+      );
+    }
+    msg = lines.join("\n");
+  }
+
+  msg +=
+    '\n\nConfigured sheet: "' +
+    sheetConfig.sheetName +
+    '"' +
+    (sheetConfig.sheet ? " (found)" : " (NOT FOUND)");
+  if (!sheetConfig.sheet) {
+    msg +=
+      "\nUse 'Initialize / Select Working Sheet' to choose the correct tab.";
+  }
+
+  msg += "\n\n" + getLatestRunSummary(logsSheet);
+  ui.alert("Daily Schedule Status", msg, ui.ButtonSet.OK);
+}
+
+/**
+ * Finds the newest SUMMARY entry in LOGS and returns it as a short status line.
+ */
+function getLatestRunSummary(logsSheet) {
+  var lastRow = logsSheet.getLastRow();
+  if (lastRow < 2) return "Last run: No run history yet.";
+
+  var rows = logsSheet
+    .getRange(2, LOG_COL.TIMESTAMP, lastRow - 1, LOG_COL.DETAIL)
+    .getValues();
+
+  for (var i = rows.length - 1; i >= 0; i--) {
+    var action = String(rows[i][LOG_COL.ACTION - 1] || "")
+      .trim()
+      .toUpperCase();
+    if (action !== "SUMMARY") continue;
+
+    var timestamp = rows[i][LOG_COL.TIMESTAMP - 1];
+    var detail = String(rows[i][LOG_COL.DETAIL - 1] || "").trim();
+    var timestampText =
+      timestamp instanceof Date
+        ? Utilities.formatDate(
+            timestamp,
+            Session.getScriptTimeZone() || "Asia/Manila",
+            "dd MMM yyyy hh:mm a",
+          )
+        : String(timestamp || "Unknown");
+
+    return (
+      "Last run: " + timestampText + "\n" + (detail || "(No summary detail)")
+    );
+  }
+
+  return "Last run: No summary log yet.";
 }
 
 /**
@@ -74,7 +291,7 @@ function manualRunNow() {
   var ui = SpreadsheetApp.getUi();
   var confirm = ui.alert(
     "Run Manual Check",
-    "This will scan all Active rows and send emails for any row whose target date is TODAY.\n\nProceed?",
+    "This will scan all Active/blank rows and send emails for any row whose target date is due (today or earlier).\n\nProceed?",
     ui.ButtonSet.YES_NO,
   );
   if (confirm !== ui.Button.YES) return;
@@ -102,10 +319,13 @@ function manualRunNow() {
  */
 function runDailyCheck() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var visaSheet = ss.getSheetByName(CONFIG.SHEET_NAME);
+  var sheetConfig = resolveAutomationSheet(ss);
+  var visaSheet = sheetConfig.sheet;
   if (!visaSheet) {
     throw new Error(
-      'Sheet "' + CONFIG.SHEET_NAME + '" not found. Check CONFIG.SHEET_NAME.',
+      'Configured sheet "' +
+        sheetConfig.sheetName +
+        '" not found. Use "Initialize / Select Working Sheet" from the Expiry Notifications menu.',
     );
   }
 
@@ -129,10 +349,13 @@ function runDailyCheck() {
   var data = visaSheet
     .getRange(CONFIG.DATA_START_ROW, 1, numDataRows, numCols)
     .getValues();
+  var totalRows = data.length;
   var today = getMidnight(new Date());
   var processed = 0,
     sent = 0,
     errors = 0;
+  var autoActivated = 0;
+  var senderEmail = getSenderAccountEmail();
 
   for (var i = 0; i < data.length; i++) {
     var row = data[i];
@@ -148,7 +371,20 @@ function runDailyCheck() {
     var attachRaw = getCellStr(row, colMap.ATTACHMENTS);
     var status = getCellStr(row, colMap.STATUS);
 
-    if (status !== STATUS.ACTIVE) continue;
+    if (!isProcessableStatus(status)) continue;
+
+    if (isStatusBlank(status)) {
+      setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.ACTIVE);
+      status = STATUS.ACTIVE;
+      autoActivated++;
+      appendLog(
+        logsSheet,
+        clientName,
+        "INFO",
+        "Blank Status auto-set to Active for processing.",
+      );
+    }
+
     processed++;
 
     var missing = [];
@@ -194,7 +430,7 @@ function runDailyCheck() {
     }
 
     var targetDate = computeTargetDate(expiryDate, offset);
-    if (!isSameDay(targetDate, today)) continue;
+    if (!isTargetDateDue(targetDate, today)) continue;
 
     var attachResult = resolveAttachments(attachRaw);
     if (attachResult.error) {
@@ -204,7 +440,7 @@ function runDailyCheck() {
       continue;
     }
 
-    var emailBody = buildEmailBody(remarks, clientName, expiryDate);
+    var emailBody = buildEmailBody(remarks, clientName, expiryDate, docType);
     var subject = buildEmailSubject(docType, clientName, expiryDate);
 
     try {
@@ -216,13 +452,15 @@ function runDailyCheck() {
         attachResult.blobs,
       );
       setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.SENT);
+      setStaffEmail(visaSheet, rowIndex, colMap.STAFF_EMAIL, senderEmail);
       appendLog(
         logsSheet,
         clientName,
         "SENT",
         "Email sent to " +
           clientEmail +
-          (staffEmail ? " (CC: " + staffEmail + ")" : ""),
+          (staffEmail ? " (CC: " + staffEmail + ")" : "") +
+          (senderEmail ? " | Sender: " + senderEmail : ""),
       );
       sent++;
     } catch (e) {
@@ -236,8 +474,12 @@ function runDailyCheck() {
     logsSheet,
     "",
     "SUMMARY",
-    "Run complete. Processed: " +
+    "Run complete. Total Rows: " +
+      totalRows +
+      " | Eligible (Active/Blank): " +
       processed +
+      " | Auto-Activated: " +
+      autoActivated +
       " | Sent: " +
       sent +
       " | Errors: " +
@@ -260,6 +502,10 @@ function buildColumnMap(sheet) {
   var reverseHeaders = {};
   for (var key in HEADERS) {
     reverseHeaders[HEADERS[key].toLowerCase().trim()] = key;
+    var aliases = HEADER_ALIASES[key] || [];
+    for (var a = 0; a < aliases.length; a++) {
+      reverseHeaders[String(aliases[a]).toLowerCase().trim()] = key;
+    }
   }
   var map = {};
   for (var c = 0; c < headerRow.length; c++) {
@@ -304,11 +550,139 @@ function getCellStr(row, colIndex) {
 }
 
 /**
+ * Returns true when a status value should be treated as Active.
+ * Handles case differences from dropdown/manual entry (e.g., ACTIVE/active/Active).
+ */
+function isStatusActive(statusValue) {
+  return (
+    String(statusValue || "")
+      .trim()
+      .toLowerCase() === STATUS.ACTIVE.toLowerCase()
+  );
+}
+
+/**
+ * Returns true when status is blank/empty.
+ */
+function isStatusBlank(statusValue) {
+  return String(statusValue || "").trim() === "";
+}
+
+/**
+ * Returns true when a row should be considered for processing.
+ * Current rule: process rows with Active or blank Status.
+ */
+function isProcessableStatus(statusValue) {
+  return isStatusActive(statusValue) || isStatusBlank(statusValue);
+}
+
+/**
+ * Compares a No. cell value with a user-entered No. value.
+ * Supports text and numeric equivalence (e.g., 1 matches 1.0).
+ */
+function isSameNoValue(cellValue, inputValue) {
+  var cellStr = String(
+    cellValue === null || cellValue === undefined ? "" : cellValue,
+  ).trim();
+  var inputStr = String(
+    inputValue === null || inputValue === undefined ? "" : inputValue,
+  ).trim();
+
+  if (!cellStr || !inputStr) return false;
+  if (cellStr === inputStr) return true;
+
+  var cellNum = Number(cellStr);
+  var inputNum = Number(inputStr);
+  if (!isNaN(cellNum) && !isNaN(inputNum)) return cellNum === inputNum;
+
+  return cellStr.toLowerCase() === inputStr.toLowerCase();
+}
+
+/**
+ * Finds a data row by No. column value.
+ * Returns { rowNum, warning, error }.
+ */
+function findRowNumberByNo(sheet, colMap, noValue) {
+  if (!colMap.NO) {
+    return {
+      rowNum: null,
+      warning: "",
+      error: 'Column "No." not found in row ' + CONFIG.HEADER_ROW + ".",
+    };
+  }
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow < CONFIG.DATA_START_ROW) {
+    return { rowNum: null, warning: "", error: "No data rows found." };
+  }
+
+  var numDataRows = lastRow - CONFIG.DATA_START_ROW + 1;
+  var noValues = sheet
+    .getRange(CONFIG.DATA_START_ROW, colMap.NO, numDataRows, 1)
+    .getValues();
+
+  var matches = [];
+  for (var i = 0; i < noValues.length; i++) {
+    if (isSameNoValue(noValues[i][0], noValue)) {
+      matches.push(CONFIG.DATA_START_ROW + i);
+    }
+  }
+
+  if (matches.length === 0) {
+    return {
+      rowNum: null,
+      warning: "",
+      error: 'No row found for No. "' + noValue + '".',
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      rowNum: matches[0],
+      warning:
+        'Multiple rows found for No. "' +
+        noValue +
+        '". Using first match at row ' +
+        matches[0] +
+        ".",
+      error: "",
+    };
+  }
+
+  return { rowNum: matches[0], warning: "", error: "" };
+}
+
+/**
  * Writes a Status value to the Status column of a given row.
  */
 function setStatus(sheet, rowIndex, statusColIndex, statusValue) {
   if (!statusColIndex) return;
   sheet.getRange(rowIndex, statusColIndex).setValue(statusValue);
+}
+
+/**
+ * Writes the sender account email to the Staff Email column after successful send.
+ */
+function setStaffEmail(sheet, rowIndex, staffEmailColIndex, senderEmail) {
+  if (!staffEmailColIndex || !senderEmail) return;
+  sheet.getRange(rowIndex, staffEmailColIndex).setValue(senderEmail);
+}
+
+/**
+ * Returns the email account most likely used to send messages from this script.
+ */
+function getSenderAccountEmail() {
+  try {
+    var effectiveEmail = Session.getEffectiveUser().getEmail();
+    if (effectiveEmail) return effectiveEmail;
+  } catch (e) {}
+
+  try {
+    var activeEmail = Session.getActiveUser().getEmail();
+    if (activeEmail) return activeEmail;
+  } catch (e) {}
+
+  return "";
 }
 
 // =============================================================================
@@ -334,6 +708,15 @@ function isSameDay(dateA, dateB) {
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
+  );
+}
+
+/**
+ * Returns true when the target send date is due on or before reference date.
+ */
+function isTargetDateDue(targetDate, referenceDate) {
+  return (
+    getMidnight(targetDate).getTime() <= getMidnight(referenceDate).getTime()
   );
 }
 
@@ -475,17 +858,22 @@ function resolveAttachments(rawField) {
 
 /**
  * Builds the HTML email body from the Remarks column.
- * Substitutes [Client Name] and [Date of Expiration] placeholders.
+ * Substitutes placeholders like [Client Name] / [client name]
+ * [Date of Expiration] / [date of expiry], and [Document Type] (case-insensitive).
  * Falls back to a minimal template if Remarks is empty.
  */
-function buildEmailBody(remarks, clientName, expiryDate) {
+function buildEmailBody(remarks, clientName, expiryDate, docType) {
   var expiryStr = formatDate(expiryDate);
+  var docTypeText = docType ? docType : "Visa/Permit";
   var bodyText;
 
   if (remarks) {
-    bodyText = remarks
-      .replace(/\[Client Name\]/g, clientName)
-      .replace(/\[Date of Expiration\]/g, expiryStr);
+    bodyText = applyTemplatePlaceholders(
+      remarks,
+      clientName,
+      expiryStr,
+      docTypeText,
+    );
   } else {
     bodyText =
       "Good day, " +
@@ -505,6 +893,22 @@ function buildEmailBody(remarks, clientName, expiryDate) {
     '<p style="font-size:11px;color:#999;">This is an automated reminder. Please do not reply directly to this email.</p>',
     "</div>",
   ].join("\n");
+}
+
+/**
+ * Applies supported template placeholders in a case-insensitive way.
+ */
+function applyTemplatePlaceholders(
+  templateText,
+  clientName,
+  expiryStr,
+  docType,
+) {
+  return String(templateText || "")
+    .replace(/\[\s*client\s*name\s*\]/gi, clientName || "")
+    .replace(/\[\s*date\s*of\s*(expiration|expiry)\s*\]/gi, expiryStr || "")
+    .replace(/\[\s*expiry\s*date\s*\]/gi, expiryStr || "")
+    .replace(/\[\s*document\s*type\s*\]/gi, docType || "Visa/Permit");
 }
 
 /**
@@ -671,7 +1075,7 @@ function removeTrigger() {
 
 /**
  * TEST HELPER: Runs the daily check immediately.
- * WARNING: This will actually send emails for any row whose target date is today.
+ * WARNING: This will actually send emails for any row whose target date is due (today or earlier).
  */
 function testRunNow() {
   Logger.log("=== testRunNow: calling runDailyCheck() ===");
@@ -680,14 +1084,19 @@ function testRunNow() {
 }
 
 /**
- * TEST HELPER: Logs the computed target date for every Active row without sending anything.
+ * TEST HELPER: Logs the computed target date for every eligible row (Active or blank Status) without sending anything.
  * Use this to verify date calculations before going live.
  */
 function previewTargetDates() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
+  var sheetConfig = resolveAutomationSheet(ss);
+  var sheet = sheetConfig.sheet;
   if (!sheet) {
-    Logger.log('Sheet "' + CONFIG.SHEET_NAME + '" not found.');
+    Logger.log(
+      'Configured sheet "' +
+        sheetConfig.sheetName +
+        '" not found. Use "Initialize / Select Working Sheet".',
+    );
     return;
   }
 
@@ -721,7 +1130,11 @@ function previewTargetDates() {
     var noticeStr = getCellStr(row, colMap.NOTICE_DATE);
     var status = getCellStr(row, colMap.STATUS);
 
-    if (status !== STATUS.ACTIVE) return;
+    if (!isProcessableStatus(status)) return;
+
+    var statusLabel = isStatusBlank(status)
+      ? "(blank -> treated as Active)"
+      : status;
 
     var expiryDate =
       expiryRaw instanceof Date ? expiryRaw : new Date(expiryRaw);
@@ -746,19 +1159,264 @@ function previewTargetDates() {
     }
 
     var targetDate = computeTargetDate(expiryDate, offset);
-    var isToday = isSameDay(targetDate, today) ? " <<< SENDS TODAY" : "";
+    var dueNow = isTargetDateDue(targetDate, today)
+      ? " <<< SENDS NOW (DUE/OVERDUE)"
+      : "";
     Logger.log(
       "Row " +
         rowIndex +
         " | " +
         clientName +
+        " | Status: " +
+        statusLabel +
         " | Expiry: " +
         formatDate(expiryDate) +
         " | Notice: " +
         noticeStr +
         " | Target: " +
         formatDate(targetDate) +
-        isToday,
+        dueNow,
     );
   });
+}
+
+/**
+ * DIAGNOSTIC: Prompts for a row number and shows all parsed field values
+ * for that row in a dialog — no email is sent.
+ */
+function diagnosticInspectRow() {
+  var ui = SpreadsheetApp.getUi();
+  var response = ui.prompt(
+    "Inspect Row",
+    "Enter the row number to inspect (data starts at row " +
+      CONFIG.DATA_START_ROW +
+      "):",
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+
+  var rowNum = parseInt(response.getResponseText().trim(), 10);
+  if (isNaN(rowNum) || rowNum < CONFIG.DATA_START_ROW) {
+    ui.alert(
+      "Invalid row number. Data starts at row " + CONFIG.DATA_START_ROW + ".",
+    );
+    return;
+  }
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetConfig = resolveAutomationSheet(ss);
+  var sheet = sheetConfig.sheet;
+  if (!sheet) {
+    ui.alert(
+      'Configured sheet "' +
+        sheetConfig.sheetName +
+        '" not found. Use "Initialize / Select Working Sheet".',
+    );
+    return;
+  }
+
+  var colMap = buildColumnMap(sheet);
+  var mapError = validateColumnMap(colMap);
+  if (mapError) {
+    ui.alert("Column map error: " + mapError);
+    return;
+  }
+
+  if (rowNum > sheet.getLastRow()) {
+    ui.alert(
+      "Row " +
+        rowNum +
+        " does not exist. Last row is " +
+        sheet.getLastRow() +
+        ".",
+    );
+    return;
+  }
+
+  var numCols = sheet.getLastColumn();
+  var row = sheet.getRange(rowNum, 1, 1, numCols).getValues()[0];
+
+  var clientName = getCellStr(row, colMap.CLIENT_NAME);
+  var clientEmail = getCellStr(row, colMap.CLIENT_EMAIL);
+  var staffEmail = getCellStr(row, colMap.STAFF_EMAIL);
+  var docType = getCellStr(row, colMap.DOC_TYPE);
+  var expiryRaw = colMap.EXPIRY_DATE ? row[colMap.EXPIRY_DATE - 1] : "";
+  var noticeStr = getCellStr(row, colMap.NOTICE_DATE);
+  var remarks = getCellStr(row, colMap.REMARKS);
+  var attachRaw = getCellStr(row, colMap.ATTACHMENTS);
+  var status = getCellStr(row, colMap.STATUS);
+
+  var expiryDate = expiryRaw instanceof Date ? expiryRaw : new Date(expiryRaw);
+  var expiryStr = isNaN(expiryDate.getTime())
+    ? "INVALID (" + expiryRaw + ")"
+    : formatDate(expiryDate);
+
+  var offset = parseNoticeOffset(noticeStr);
+  var targetStr =
+    offset === null
+      ? 'Cannot parse notice: "' + noticeStr + '"'
+      : formatDate(computeTargetDate(expiryDate, offset));
+
+  var today = getMidnight(new Date());
+  var sendEligibleNow =
+    offset !== null && !isNaN(expiryDate.getTime())
+      ? isTargetDateDue(computeTargetDate(expiryDate, offset), today)
+        ? "YES"
+        : "No"
+      : "N/A";
+
+  var msg = [
+    "Row: " + rowNum,
+    "Status: " + (status || "(empty)"),
+    "",
+    "Client Name:  " + (clientName || "(empty)"),
+    "Client Email: " + (clientEmail || "(empty)"),
+    "Staff Email:  " + (staffEmail || "(empty)"),
+    "Doc Type:     " + (docType || "(empty)"),
+    "",
+    "Expiry Date:  " + expiryStr,
+    "Notice Date:  " + (noticeStr || "(empty)"),
+    "Target Date:  " + targetStr,
+    "Send Eligible Now (Due/Overdue):  " + sendEligibleNow,
+    "",
+    "Attached Files: " + (attachRaw || "(none)"),
+    "",
+    "Remarks (first 200 chars):",
+    remarks
+      ? remarks.substring(0, 200) + (remarks.length > 200 ? "..." : "")
+      : "(empty)",
+  ].join("\n");
+
+  ui.alert("Row " + rowNum + " Inspection", msg, ui.ButtonSet.OK);
+}
+
+/**
+ * DIAGNOSTIC: Prompts for a No. value, finds the matching row,
+ * shows a summary of what will be sent,
+ * and asks for confirmation before actually sending the test email.
+ * Ignores Status and target date — sends regardless.
+ */
+function diagnosticSendTestRow() {
+  var ui = SpreadsheetApp.getUi();
+  var response = ui.prompt(
+    "Send Test Email by No.",
+    'Enter the value from column "No." to test (e.g., 15):\n\n' +
+      "Note: Email will be sent regardless of Status or target date.",
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+
+  var noValue = response.getResponseText().trim();
+  if (!noValue) {
+    ui.alert("Invalid No. value. Please enter a value from column No.");
+    return;
+  }
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetConfig = resolveAutomationSheet(ss);
+  var sheet = sheetConfig.sheet;
+  if (!sheet) {
+    ui.alert(
+      'Configured sheet "' +
+        sheetConfig.sheetName +
+        '" not found. Use "Initialize / Select Working Sheet".',
+    );
+    return;
+  }
+
+  var colMap = buildColumnMap(sheet);
+  var mapError = validateColumnMap(colMap);
+  if (mapError) {
+    ui.alert("Column map error: " + mapError);
+    return;
+  }
+
+  var lookup = findRowNumberByNo(sheet, colMap, noValue);
+  if (lookup.error) {
+    ui.alert(lookup.error);
+    return;
+  }
+
+  var rowNum = lookup.rowNum;
+  if (lookup.warning) {
+    ui.alert("No. Lookup Notice", lookup.warning, ui.ButtonSet.OK);
+  }
+
+  var numCols = sheet.getLastColumn();
+  var row = sheet.getRange(rowNum, 1, 1, numCols).getValues()[0];
+  var rowNo = getCellStr(row, colMap.NO) || noValue;
+
+  var clientName = getCellStr(row, colMap.CLIENT_NAME);
+  var clientEmail = getCellStr(row, colMap.CLIENT_EMAIL);
+  var staffEmail = getCellStr(row, colMap.STAFF_EMAIL);
+  var docType = getCellStr(row, colMap.DOC_TYPE);
+  var expiryRaw = colMap.EXPIRY_DATE ? row[colMap.EXPIRY_DATE - 1] : "";
+  var remarks = getCellStr(row, colMap.REMARKS);
+  var attachRaw = getCellStr(row, colMap.ATTACHMENTS);
+
+  var missing = [];
+  if (!clientName) missing.push("Client Name");
+  if (!clientEmail) missing.push("Client Email");
+  if (!expiryRaw) missing.push("Expiry Date");
+  if (missing.length > 0) {
+    ui.alert("Cannot send — missing required field(s): " + missing.join(", "));
+    return;
+  }
+
+  var expiryDate = expiryRaw instanceof Date ? expiryRaw : new Date(expiryRaw);
+  if (isNaN(expiryDate.getTime())) {
+    ui.alert("Cannot send — invalid Expiry Date: " + expiryRaw);
+    return;
+  }
+
+  var subject = buildEmailSubject(docType, clientName, expiryDate);
+
+  var confirm = ui.alert(
+    "Confirm Test Email",
+    "This will send a REAL email for No. " +
+      rowNo +
+      " (row " +
+      rowNum +
+      "):\n\n" +
+      "To:      " +
+      clientEmail +
+      "\n" +
+      (staffEmail ? "CC:      " + staffEmail + "\n" : "") +
+      "Subject: " +
+      subject +
+      "\n\n" +
+      "Proceed?",
+    ui.ButtonSet.YES_NO,
+  );
+  if (confirm !== ui.Button.YES) return;
+
+  var attachResult = resolveAttachments(attachRaw);
+  if (attachResult.error) {
+    ui.alert("Attachment error: " + attachResult.error);
+    return;
+  }
+
+  var emailBody = buildEmailBody(remarks, clientName, expiryDate, docType);
+
+  try {
+    sendReminderEmail(
+      clientEmail,
+      staffEmail,
+      subject,
+      emailBody,
+      attachResult.blobs,
+    );
+    var senderEmail = getSenderAccountEmail();
+    setStaffEmail(sheet, rowNum, colMap.STAFF_EMAIL, senderEmail);
+    ui.alert(
+      "Test email sent successfully to " +
+        clientEmail +
+        "." +
+        (senderEmail
+          ? "\n\nStaff Email updated with sender account: " + senderEmail
+          : ""),
+    );
+  } catch (e) {
+    ui.alert("Failed to send: " + e.message);
+  }
 }
