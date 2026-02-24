@@ -19,7 +19,7 @@ The system automatically:
 
 - Detects new, modified, moved, or deleted files in both drives
 - Tracks **who uploaded or modified** each file (by email)
-- **AI-renames pleading files** using Gemini into a clean `YYYY-MM-DD Descriptive Title` format
+- **AI-renames pleading files** using Gemini into a clean `YYYY-MM-DD Descriptive Title` format (should be fixing even if there are fixed and renamed files because for example an existing files in the google drive folder have this "2025-11-05 2025 11 05 Request For A Copy Of" which is wrong format because of the double dates + the not complete descriptive description of the file.)
 - Logs all activity to a dedicated Logs sheet
 - Runs on a **daily schedule** (6 PM Manila time, Mon–Fri)
 

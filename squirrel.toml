@@ -1,6 +1,6 @@
 [project]
 domains = []
-name = "my-project"
+name = "filepino-audit"
 
 [crawler]
 max_pages = 100
@@ -34,7 +34,3 @@ concurrency = 5
 format = "console"
 
 [rule_options]
-
-[report]
-output = "./squirrel-report.html"
-

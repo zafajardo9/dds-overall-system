@@ -193,6 +193,10 @@ function onOpen() {
     .addSeparator()
     .addItem("⏰ Setup Daily Schedule", "setupDailySchedule")
     .addItem("🛑 Remove Daily Schedule", "removeDailySchedule")
+    .addItem(
+      "📌 Implement to Other Google Sheet",
+      "showImplementationGuideModal",
+    )
     .addSeparator()
     .addSubMenu(
       ui
@@ -209,6 +213,79 @@ function onOpen() {
         .addItem("🗑️ Clear Error Logs", "clearErrorLogs"),
     )
     .addToUi();
+}
+
+function showImplementationGuideModal() {
+  const html = HtmlService.createHtmlOutput(
+    `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <base target="_top" />
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            color: #202124;
+          }
+          .container {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+          }
+          .message {
+            font-size: 16px;
+            line-height: 1.4;
+          }
+          .actions {
+            display: flex;
+            gap: 10px;
+          }
+          button {
+            border: 0;
+            border-radius: 6px;
+            padding: 10px 14px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+          }
+          .primary {
+            background: #1a73e8;
+            color: #fff;
+          }
+          .secondary {
+            background: #f1f3f4;
+            color: #202124;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="message">Want to implement this to other google sheet?</div>
+          <div class="actions">
+            <button class="primary" onclick="openGuide()">Open Pastebin Guide</button>
+            <button class="secondary" onclick="google.script.host.close()">Close</button>
+          </div>
+        </div>
+
+        <script>
+          function openGuide() {
+            window.open("https://pastebin.com/edit/aawyCS7c", "_blank");
+            google.script.host.close();
+          }
+        </script>
+      </body>
+    </html>
+  `,
+  )
+    .setWidth(430)
+    .setHeight(200);
+
+  SpreadsheetApp.getUi().showModalDialog(
+    html,
+    "Implement to Other Google Sheet",
+  );
 }
 
 /**
@@ -389,6 +466,85 @@ function setupPleadingsDropdowns(sheet) {
 }
 
 /**
+ * Sanitizes a pleading title candidate for safe filename use.
+ * Removes duplicate/leading date tokens to prevent names like:
+ * "2025-11-05 2025 11 05 Request For..."
+ */
+function sanitizePleadingTitle(rawTitle) {
+  if (!rawTitle) return "";
+
+  let cleanedTitle = String(rawTitle);
+
+  // Remove extension if included in AI output/input candidate
+  cleanedTitle = cleanedTitle.replace(/\.[^/.]+$/, "");
+
+  // Remove wrapping quotes
+  cleanedTitle = cleanedTitle.replace(/^[`"'“”‘’\s]+|[`"'“”‘’\s]+$/g, "");
+
+  // Remove leading date patterns (repeat-safe)
+  cleanedTitle = cleanedTitle.replace(
+    /^(\s*(?:\d{4}[-/\s]\d{1,2}[-/\s]\d{1,2}|\d{1,2}[-/\s]\d{1,2}[-/\s]\d{4})\s*)+/i,
+    "",
+  );
+
+  // Remove illegal filename characters and common separators
+  cleanedTitle = cleanedTitle.replace(/[\\/:*?"<>|]+/g, " ");
+  cleanedTitle = cleanedTitle.replace(/[_-]+/g, " ");
+
+  // Clean whitespace
+  cleanedTitle = cleanedTitle.replace(/\s+/g, " ").trim();
+
+  return cleanedTitle
+    .split(" ")
+    .filter(Boolean)
+    .map((word) =>
+      word.replace(/[A-Za-z][A-Za-z'`-]*/g, (segment) => {
+        // Preserve Roman numerals (e.g., II, III, IV)
+        if (/^(?:[ivxlcdm]+)$/i.test(segment)) {
+          return segment.toUpperCase();
+        }
+        return segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase();
+      }),
+    )
+    .join(" ");
+}
+
+/**
+ * Basic guard against truncated AI outputs (e.g., ending with "Of", "For", "To").
+ */
+function isLikelyIncompletePleadingTitle(title) {
+  if (!title) return true;
+
+  const normalized = title
+    .trim()
+    .replace(/[.,;:!?]+$/g, "")
+    .toLowerCase();
+  if (!normalized) return true;
+
+  const trailingWord = normalized.split(/\s+/).pop();
+  const danglingWords = [
+    "of",
+    "for",
+    "to",
+    "and",
+    "or",
+    "the",
+    "a",
+    "an",
+    "in",
+    "on",
+    "at",
+    "by",
+    "with",
+    "from",
+    "into",
+    "onto",
+  ];
+
+  return danglingWords.includes(trailingWord);
+}
+
+/**
  * UPDATED: Generate pleading name with new convention - YYYY-MM-DD Descriptive Title (no folder name).
  * Attempts AI-powered title generation via Gemini first; falls back to filename-derived title.
  * FIXED: Strips existing date patterns from original filename to prevent duplicate dates.
@@ -396,47 +552,35 @@ function setupPleadingsDropdowns(sheet) {
 function generatePleadingName(originalName, dateCreated) {
   // Format: YYYY-MM-DD
   const dateStr = dateCreated.toISOString().split("T")[0];
+
   // Get file extension
-  const extension = originalName.split(".").pop();
+  const extensionMatch = originalName.match(/\.([^.]+)$/);
+  const extension = extensionMatch ? extensionMatch[1] : "";
+  const extensionSuffix = extension ? `.${extension}` : "";
+
   // Attempt AI-powered title generation
-  const aiTitle = generateAiPleadingTitle(originalName);
-  if (aiTitle) {
+  const aiTitle = sanitizePleadingTitle(generateAiPleadingTitle(originalName));
+  if (aiTitle && !isLikelyIncompletePleadingTitle(aiTitle)) {
     console.log(`AI title generated for "${originalName}": "${aiTitle}"`);
-    return `${dateStr} ${aiTitle}.${extension}`;
+    return `${dateStr} ${aiTitle}${extensionSuffix}`;
   }
+
+  if (aiTitle) {
+    console.log(
+      `AI title looked incomplete for "${originalName}". Falling back to filename cleanup: "${aiTitle}"`,
+    );
+  }
+
   // Fallback: Extract descriptive title from original name (remove extension and clean up)
-  let descriptiveTitle = originalName.replace(/\.[^/.]+$/, ""); // Remove extension
-
-  // FIX: Strip existing date patterns to prevent duplicates like "2026-02-07 2026 02 07..."
-  // Pattern 1: YYYY-MM-DD at the start
-  descriptiveTitle = descriptiveTitle.replace(
-    /^\d{4}[-\s]\d{2}[-\s]\d{2}\s*/i,
-    "",
-  );
-  // Pattern 2: YYYY MM DD (space-separated) at the start
-  descriptiveTitle = descriptiveTitle.replace(/^\d{4}\s+\d{2}\s+\d{2}\s*/i, "");
-  // Pattern 3: Multiple consecutive date patterns
-  descriptiveTitle = descriptiveTitle.replace(
-    /(\d{4}[-\s]?\d{2}[-\s]?\d{2}\s*)+/gi,
-    "",
-  );
-  // Pattern 4: Dates in parentheses or brackets at the end like "(January 21, 2026)" - keep these as they're part of the title
-
-  descriptiveTitle = descriptiveTitle.replace(/[_-]/g, " "); // Replace underscores and hyphens with spaces
-  descriptiveTitle = descriptiveTitle.replace(/\s+/g, " ").trim(); // Clean up multiple spaces
+  let descriptiveTitle = sanitizePleadingTitle(originalName);
 
   // Skip if title becomes empty after stripping dates
   if (!descriptiveTitle) {
     descriptiveTitle = "Untitled Document";
   }
 
-  // Capitalize first letter of each word for better readability
-  descriptiveTitle = descriptiveTitle
-    .split(" ")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
   // New format: YYYY-MM-DD Descriptive Title.extension (NO folder name)
-  return `${dateStr} ${descriptiveTitle}.${extension}`;
+  return `${dateStr} ${descriptiveTitle}${extensionSuffix}`;
 }
 
 /**
@@ -1803,8 +1947,14 @@ function generateAiPleadingTitle(fileName) {
   try {
     const prompt =
       `You are a legal document classifier. Given the raw filename of a scanned legal pleading, ` +
-      `produce a clean, formal, human-readable descriptive title (no date prefix, no file extension). ` +
-      `Use proper title case. Output ONLY the title, nothing else.\n\nFilename: ${fileName}`;
+      `produce a clean, formal, complete human-readable descriptive title.\n` +
+      `Rules:\n` +
+      `1) Output ONLY the title text.\n` +
+      `2) Do NOT include any date or date-like tokens (e.g., 2025-11-05, 2025 11 05, 11/05/2025).\n` +
+      `3) Do NOT include any file extension.\n` +
+      `4) Do NOT truncate the title; avoid ending in dangling words like "of", "for", or "to".\n` +
+      `5) Use proper title case.\n\n` +
+      `Filename: ${fileName}`;
     const payload = {
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {

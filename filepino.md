@@ -8,54 +8,33 @@
 
 ## 🐛 Known Issues
 
-- [ ] Responsiveness breaks on low resolution (not mobile phone sizes but near tablet sizes)
+- Responsiveness breaks on low resolution (not mobile phone sizes but near tablet sizes)
 
----
 
-## 1. Responsiveness & Cross-Browser
 
-- [ ] Test all breakpoints: mobile (320px–480px), tablet (768px–1024px), small laptop (1024px–1366px), desktop (1440px+)
-- [ ] Fix the **known tablet-range breakpoint issue** — layout breaks near tablet resolutions
-- [ ] Check horizontal scrolling doesn't appear at any viewport
-- [ ] Verify navigation menu collapses properly on mobile (hamburger menu behavior)
-- [ ] Test sticky/fixed header behavior on scroll across all breakpoints
-- [ ] Cross-browser testing: Chrome, Safari, Firefox, Edge (latest versions)
-- [ ] Test on actual iOS Safari and Android Chrome devices
-- [ ] Verify all images and cards scale without overflow or cropping issues
+- [x] Test all breakpoints: mobile (320px–480px), tablet (768px–1024px), small laptop (1024px–1366px), desktop (1440px+)
+  - All Working in each screen sizes
+- [x] Check horizontal scrolling doesn't appear at any viewport
+- [x] Verify navigation menu collapses properly on mobile (hamburger menu behavior)
+- [x] Test sticky/fixed header behavior on scroll across all breakpoints
+- [x] Cross-browser testing: Chrome, Safari, Firefox, Edge (latest versions)
+- [x] Test on actual iOS Safari and Android Chrome devices
+- [x] Verify all images and cards scale without overflow or cropping issues
 - [ ] Check touch targets are large enough on mobile (minimum 44×44px)
+- https://www.filepino.com/compliance-calendar/ what is this page and this seems outdated.
+- Navigations and links seems working across ther pages especially in blogs. Download Button is not working too.
+- [ ] Footer links (Email, Phone, Map, Social Media) are working, But in thw footer for socials, The whatsapp button is not working tested in mobile screen
+- Navigation bar seems good and working for desktop, BUT in mobile its very hard because some navigation dropdowns when pressed already opens another link, It seems like the dropdown button directly have a link making it hard for users to navigate the links inside the dropdown.
+
+
 
 ---
 
-## 2. Navigation & Links
-
-- [ ] All navbar links lead to the correct pages
-- [ ] Footer links (Email, Phone, Map, Social Media) are working
-- [ ] "Corporate Services" CTA links to the right destination
-- [ ] "Request a Free Quote" button goes to `/contact-us/`
-- [ ] FAQ link (`/faqs/`) loads correctly
-- [ ] Service pages load correctly:
-  - [ ] `/company-formation/`
-  - [ ] `/intellectual-property-rights-registration-philippines/`
-  - [ ] `/accounting-firm-philippines/`
-  - [ ] `/hr-consulting-outsourcing-services-philippines/`
-  - [ ] `/background-check/`
-  - [ ] `/philippine-visas/`
-- [ ] Internal links don't result in 404 pages
-- [ ] External links (Facebook, Google Maps) open in a new tab
-- [ ] No orphan pages or dead-end pages without navigation back
-
----
 
 ## 3. Forms & Contact
 
-- [ ] Contact form on `/contact-us/` submits successfully
-- [ ] Form validation works (required fields, valid email format, phone format)
-- [ ] Form shows a success/error message after submission
-- [ ] Email notifications are received after form submission
-- [ ] CAPTCHA or spam protection is active on forms
-- [ ] "Get in Touch" section CTA button works as expected
-- [ ] Phone number `tel:` links work on mobile (initiates call)
-- [ ] Email `mailto:` link works correctly
+- [ ] Contact form , I didnt try to test it and maybe its working based on the volume of requests or clients we are getting.
+- [ ] Form validation works but not on Phone Number. It accepts any characters.
 
 ---
 
