@@ -15,3 +15,8 @@
     - https://duranschulze.com/wp-content/uploads/2025/05/inheritance-of-ip-rights_-necessity-of-ip-owners.png
     - https://duranschulze.com/wp-content/uploads/2025/05/change-of-name-1.png
     - https://duranschulze.com/wp-content/uploads/2024/09/pexels-pixabay-290275.png
+
+
+
+- All websites have the "Update Now" for the wordpress version
+- 
