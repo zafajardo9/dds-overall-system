@@ -5,3 +5,7 @@ squirrel audit https://www.filedocsphil.com/ --output /Users/zafajardo/Documents
 squirrel audit https://telehrsolutions.com/ --output /Users/zafajardo/Documents/Development/dds-all-system/telehr.html --format html
 
 squirrel report 95e800ac --format html --output /Users/zafajardo/Documents/Development/dds-all-system/duran.html
+
+squirrel audit https://www.filepino.com/ --output /Users/zafajardo/Documents/Development/dds-all-system/filepino/filepino.txt --format text --coverage full --max-pages
+
+squirrel audit https://www.filepino.com/ -m 200 -f json -o report.json
