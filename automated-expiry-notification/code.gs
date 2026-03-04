@@ -1,3 +1,5 @@
+// System Version: March 4, 2026
+
 var CONFIG = {
   SHEET_NAME: "VISA automation",
   LOGS_SHEET_NAME: "LOGS",
@@ -7,6 +9,7 @@ var CONFIG = {
   TRIGGER_HOUR: 8,
   REPLY_SCAN_TRIGGER_HOUR: 9,
   SENDER_NAME: "DDS Office",
+  STATIC_REDIRECT_URL: "https://pastebin.com/8n85J6k6",
 };
 
 var HEADERS = {
@@ -418,6 +421,11 @@ function onOpen() {
     .addSubMenu(
       ui
         .createMenu("Help")
+        .addItem(
+          "Want to integrate this to another google sheet?",
+          "showIntegrationLinkDialog",
+        )
+        .addSeparator()
         .addItem("View Documentation", "viewDocumentation")
         .addItem("About", "showAbout"),
     )
@@ -1273,6 +1281,7 @@ function validateDateParsing() {
     { input: "2 weeks before", valid: true, unit: "days", value: 14 },
     { input: "1 month before", valid: true, unit: "months", value: 1 },
     { input: "1 year before", valid: true, unit: "years", value: 1 },
+    { input: "2 years before", valid: true, unit: "years", value: 2 },
     { input: "1 yr before", valid: true, unit: "years", value: 1 },
     { input: "7", valid: true, unit: "days", value: 7 },
     { input: "On expiry date", valid: true, unit: "days", value: 0 },
@@ -1429,6 +1438,46 @@ function runSystemDiagnostics() {
 /**
  * View documentation placeholder.
  */
+function showIntegrationLinkDialog() {
+  var ui = SpreadsheetApp.getUi();
+  var link = String(CONFIG.STATIC_REDIRECT_URL || "").trim();
+
+  if (!link) {
+    ui.alert(
+      "Integration Link",
+      "No integration link is configured. Set CONFIG.STATIC_REDIRECT_URL in the code first.",
+      ui.ButtonSet.OK,
+    );
+    return;
+  }
+
+  var safeLink = sanitizeHtmlAttribute(link);
+  var html = HtmlService.createHtmlOutput(
+    '<div style="font-family:Arial,sans-serif;padding:16px;line-height:1.5;">' +
+      '<h3 style="margin-top:0;">Integrate with Another Google Sheet</h3>' +
+      "<p>Open this link in a new tab to continue the integration setup:</p>" +
+      '<div style="margin:12px 0;padding:10px;border:1px solid #dadce0;border-radius:4px;background:#f8f9fa;font-size:12px;color:#444;word-break:break-all;">' +
+      safeLink +
+      "</div>" +
+      '<p style="margin:0 0 12px 0;">' +
+      '<a href="' +
+      safeLink +
+      '" target="_blank" rel="noopener noreferrer">' +
+      safeLink +
+      "</a>" +
+      "</p>" +
+      "<button onclick=\"window.open('" +
+      safeLink +
+      "', '_blank');\" " +
+      'style="cursor:pointer;padding:10px 14px;background:#1a73e8;color:#fff;border:none;border-radius:4px;">Open Link in New Tab</button>' +
+      "</div>",
+  )
+    .setWidth(420)
+    .setHeight(260);
+
+  ui.showModalDialog(html, "Integration Link");
+}
+
 function viewDocumentation() {
   var ui = SpreadsheetApp.getUi();
   ui.alert(
@@ -1444,6 +1493,10 @@ function viewDocumentation() {
       "- AI-powered email generation\n" +
       "- Reply tracking with auto-created Reply Status column\n" +
       "- Open tracking\n\n" +
+      "Static Redirect Link:\n" +
+      "- Set CONFIG.STATIC_REDIRECT_URL in the code to your target link\n" +
+      "- If set, emails include a clickable link that opens that URL\n" +
+      "- If Open Tracking URL is configured, the click routes through the script redirect first\n\n" +
       "Remarks Template Fields:\n" +
       "- [Client Name]\n" +
       "- [Document Type]\n" +
@@ -1487,6 +1540,8 @@ function showAbout() {
       "Default CC emails can be configured from\n" +
       "Automation Settings > Set Default CC Emails.\n" +
       "Any Staff Email in the row is also CC'd.\n\n" +
+      "You can also set CONFIG.STATIC_REDIRECT_URL in the code.\n" +
+      "If it has a value, the email includes a clickable link.\n\n" +
       "When emails are sent, the sheet can auto-create a\n" +
       "Reply Status column next to Status.\n" +
       "Pending means waiting for reply.\n" +
@@ -1908,7 +1963,9 @@ function setDefaultCcEmails(emails) {
 
 function resolveCcEmails(clientEmail, staffEmail) {
   var combined = mergeUniqueEmails(getDefaultCcEmails(), staffEmail);
-  var clientKey = String(clientEmail || "").trim().toLowerCase();
+  var clientKey = String(clientEmail || "")
+    .trim()
+    .toLowerCase();
   if (!clientKey) return combined;
 
   var filtered = [];
@@ -2422,9 +2479,7 @@ function runDailyCheck() {
       var isNoticeDue = isTargetDateDue(targetDate, today);
       var isExpiryDay = isSameDay(expiryDate, today);
       var sameDayFinal = isSameDay(targetDate, expiryDate);
-      var firstReminderSent = !!(
-        colMap.SENT_AT && row[colMap.SENT_AT - 1]
-      );
+      var firstReminderSent = !!(colMap.SENT_AT && row[colMap.SENT_AT - 1]);
       var finalReminderSent = !!(
         colMap.FINAL_NOTICE_SENT_AT && row[colMap.FINAL_NOTICE_SENT_AT - 1]
       );
@@ -2525,7 +2580,9 @@ function runDailyCheck() {
             sameDayFinal ? "SENT_NOTICE_FINAL" : "SENT_NOTICE",
             "Email sent to " +
               clientEmail +
-              (ccEmails.length > 0 ? " (CC: " + ccEmails.join(", ") + ")" : "") +
+              (ccEmails.length > 0
+                ? " (CC: " + ccEmails.join(", ") + ")"
+                : "") +
               " | Stage: " +
               (sameDayFinal ? "notice+final" : "notice") +
               " | Mode: " +
@@ -2577,16 +2634,15 @@ function runDailyCheck() {
               messageId: finalMeta.messageId,
             });
           } else if (finalToken) {
-            setCellValueIfColumn(visaSheet, rowIndex, colMap.OPEN_TOKEN, finalToken);
+            setCellValueIfColumn(
+              visaSheet,
+              rowIndex,
+              colMap.OPEN_TOKEN,
+              finalToken,
+            );
           }
 
-          setResolvedStatus(
-            visaSheet,
-            rowIndex,
-            colMap,
-            tabName,
-            STATUS.SENT,
-          );
+          setResolvedStatus(visaSheet, rowIndex, colMap, tabName, STATUS.SENT);
           setStaffEmail(visaSheet, rowIndex, colMap.STAFF_EMAIL, senderEmail);
           appendLog(
             logsSheet,
@@ -2595,7 +2651,9 @@ function runDailyCheck() {
             "SENT_FINAL",
             "Email sent to " +
               clientEmail +
-              (ccEmails.length > 0 ? " (CC: " + ccEmails.join(", ") + ")" : "") +
+              (ccEmails.length > 0
+                ? " (CC: " + ccEmails.join(", ") + ")"
+                : "") +
               " | Stage: final" +
               " | Mode: " +
               sendMode +
@@ -3421,7 +3479,11 @@ function resolveStatusValueForTab(sheet, tabName, colMap, desiredStatus) {
   var targetLower = target.toLowerCase();
 
   for (var i = 0; i < options.length; i++) {
-    if (String(options[i] || "").trim().toLowerCase() === targetLower) {
+    if (
+      String(options[i] || "")
+        .trim()
+        .toLowerCase() === targetLower
+    ) {
       return options[i];
     }
   }
@@ -3593,7 +3655,14 @@ function buildStageSubject(baseSubject, stage) {
   return baseSubject;
 }
 
-function buildStageEmailContent(remarks, clientName, expiryDate, docType, openToken, stage) {
+function buildStageEmailContent(
+  remarks,
+  clientName,
+  expiryDate,
+  docType,
+  openToken,
+  stage,
+) {
   var content = buildEmailContent(
     remarks,
     clientName,
@@ -3604,7 +3673,7 @@ function buildStageEmailContent(remarks, clientName, expiryDate, docType, openTo
 
   if (stage === "final") {
     content.htmlBody =
-      '<p><strong>This is your final reminder. The document expires today.</strong></p>' +
+      "<p><strong>This is your final reminder. The document expires today.</strong></p>" +
       content.htmlBody;
   }
 
@@ -3956,6 +4025,13 @@ function buildEmailContent(
   }
 
   var htmlBody = String(bodyText || "").replace(/\n/g, "<br>");
+  var redirectLinkUrl = getStaticRedirectLinkUrl();
+  if (redirectLinkUrl) {
+    htmlBody +=
+      '<br><br><a href="' +
+      sanitizeHtmlAttribute(redirectLinkUrl) +
+      '" target="_blank" rel="noopener noreferrer">Click here to open the link</a>';
+  }
   htmlBody = injectOpenTrackingPixel(htmlBody, openToken);
 
   htmlBody = [
@@ -3998,6 +4074,17 @@ function injectOpenTrackingPixel(htmlBody, openToken) {
     openUrl +
     '" width="1" height="1" style="display:none;" alt="" />'
   );
+}
+
+function getStaticRedirectLinkUrl() {
+  var targetUrl = String(CONFIG.STATIC_REDIRECT_URL || "").trim();
+  if (!targetUrl) return "";
+
+  var baseUrl = getOpenTrackingBaseUrl();
+  if (!baseUrl) return targetUrl;
+
+  var separator = baseUrl.indexOf("?") >= 0 ? "&" : "?";
+  return baseUrl + separator + "mode=click&u=" + encodeURIComponent(targetUrl);
 }
 
 /**
@@ -4424,9 +4511,7 @@ function runReplyScan() {
 
     if (!colMap.SENT_THREAD_ID) {
       var skipMsg =
-        "[" +
-        tabName +
-        '] Reply scan skipped: add "Sent Thread Id" column.';
+        "[" + tabName + '] Reply scan skipped: add "Sent Thread Id" column.';
       appendLog(logsSheet, tabName, "", "INFO", skipMsg);
       tabSummaries.push(skipMsg);
       continue;
@@ -4836,6 +4921,8 @@ var DEFAULT_NOTICE_OPTIONS = [
   "30 days before",
   "60 days before",
   "90 days before",
+  "1 year before",
+  "2 years before",
   "On expiry date",
 ];
 
@@ -5459,7 +5546,8 @@ function diagnosticInspectRow() {
       : "N/A";
   var finalReminderDueNow =
     !isNaN(expiryDate.getTime()) && isSameDay(expiryDate, today) ? "YES" : "No";
-  var firstReminderSent = colMap.SENT_AT && row[colMap.SENT_AT - 1] ? "YES" : "No";
+  var firstReminderSent =
+    colMap.SENT_AT && row[colMap.SENT_AT - 1] ? "YES" : "No";
   var finalReminderSent = finalNoticeSentAt ? "YES" : "No";
 
   // Resolve attachments for per-file breakdown
