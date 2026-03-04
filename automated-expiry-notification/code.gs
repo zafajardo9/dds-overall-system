@@ -1442,7 +1442,7 @@ function viewDocumentation() {
       "- Global default CC emails from the Automation Settings menu\n" +
       "- Row-level Staff Email is also included in CC\n" +
       "- AI-powered email generation\n" +
-      "- Reply tracking\n" +
+      "- Reply tracking with auto-created Reply Status column\n" +
       "- Open tracking\n\n" +
       "Remarks Template Fields:\n" +
       "- [Client Name]\n" +
@@ -1456,6 +1456,10 @@ function viewDocumentation() {
       "- First reminder sends on the computed Notice Date target\n" +
       "- Final reminder sends on the exact Expiry Date\n" +
       "- A row is fully complete only after the final reminder is sent\n\n" +
+      "Reply Tracking:\n" +
+      "- The sheet auto-creates a Reply Status column next to Status when needed\n" +
+      "- Pending = email was sent and the system is waiting for a reply\n" +
+      "- Replied = a matching client reply was detected\n\n" +
       "For setup:\n" +
       "1. Configure automation tabs\n" +
       "2. Map columns if needed\n" +
@@ -1483,6 +1487,10 @@ function showAbout() {
       "Default CC emails can be configured from\n" +
       "Automation Settings > Set Default CC Emails.\n" +
       "Any Staff Email in the row is also CC'd.\n\n" +
+      "When emails are sent, the sheet can auto-create a\n" +
+      "Reply Status column next to Status.\n" +
+      "Pending means waiting for reply.\n" +
+      "Replied means the client replied and was detected.\n\n" +
       "In the Remarks column, users can write the email body\n" +
       "and use these fields:\n" +
       "[Client Name], [Document Type], [Expiry Date],\n" +
@@ -2339,8 +2347,13 @@ function runDailyCheck() {
       if (!isProcessableStatus(status)) continue;
 
       if (isStatusBlank(status)) {
-        setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.ACTIVE);
-        status = STATUS.ACTIVE;
+        setResolvedStatus(visaSheet, rowIndex, colMap, tabName, STATUS.ACTIVE);
+        status = resolveStatusValueForTab(
+          visaSheet,
+          tabName,
+          colMap,
+          STATUS.ACTIVE,
+        );
         autoActivated++;
         appendLog(
           logsSheet,
@@ -2367,7 +2380,7 @@ function runDailyCheck() {
       if (!noticeStr) missing.push("Notice Date");
       if (missing.length > 0) {
         var errMsg = "Missing required field(s): " + missing.join(", ");
-        setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.ERROR);
+        setResolvedStatus(visaSheet, rowIndex, colMap, tabName, STATUS.ERROR);
         appendLog(logsSheet, tabName, clientName, "ERROR", errMsg);
         errors++;
         continue;
@@ -2376,7 +2389,7 @@ function runDailyCheck() {
       var expiryDate =
         expiryRaw instanceof Date ? expiryRaw : new Date(expiryRaw);
       if (isNaN(expiryDate.getTime())) {
-        setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.ERROR);
+        setResolvedStatus(visaSheet, rowIndex, colMap, tabName, STATUS.ERROR);
         appendLog(
           logsSheet,
           tabName,
@@ -2390,7 +2403,7 @@ function runDailyCheck() {
 
       var offset = parseNoticeOffset(noticeStr);
       if (offset === null) {
-        setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.ERROR);
+        setResolvedStatus(visaSheet, rowIndex, colMap, tabName, STATUS.ERROR);
         appendLog(
           logsSheet,
           tabName,
@@ -2426,7 +2439,7 @@ function runDailyCheck() {
 
       var attachResult = resolveAttachments(attachRaw);
       if (attachResult.fatalError) {
-        setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.ERROR);
+        setResolvedStatus(visaSheet, rowIndex, colMap, tabName, STATUS.ERROR);
         appendLog(
           logsSheet,
           tabName,
@@ -2470,6 +2483,7 @@ function runDailyCheck() {
             attachResult.blobs,
           );
 
+          colMap = ensureReplyStatusColumn(visaSheet, tabName, colMap);
           writePostSendMetadata(visaSheet, rowIndex, colMap, {
             sentAt: new Date(),
             senderEmail: senderEmail,
@@ -2486,9 +2500,21 @@ function runDailyCheck() {
               messageId: noticeMeta.messageId,
             });
             shouldSendFinal = false;
-            setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.SENT);
+            setResolvedStatus(
+              visaSheet,
+              rowIndex,
+              colMap,
+              tabName,
+              STATUS.SENT,
+            );
           } else {
-            setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.ACTIVE);
+            setResolvedStatus(
+              visaSheet,
+              rowIndex,
+              colMap,
+              tabName,
+              STATUS.ACTIVE,
+            );
           }
 
           setStaffEmail(visaSheet, rowIndex, colMap.STAFF_EMAIL, senderEmail);
@@ -2542,6 +2568,7 @@ function runDailyCheck() {
           });
 
           if (!firstReminderSent && !shouldSendNotice) {
+            colMap = ensureReplyStatusColumn(visaSheet, tabName, colMap);
             writePostSendMetadata(visaSheet, rowIndex, colMap, {
               sentAt: new Date(),
               senderEmail: senderEmail,
@@ -2553,7 +2580,13 @@ function runDailyCheck() {
             setCellValueIfColumn(visaSheet, rowIndex, colMap.OPEN_TOKEN, finalToken);
           }
 
-          setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.SENT);
+          setResolvedStatus(
+            visaSheet,
+            rowIndex,
+            colMap,
+            tabName,
+            STATUS.SENT,
+          );
           setStaffEmail(visaSheet, rowIndex, colMap.STAFF_EMAIL, senderEmail);
           appendLog(
             logsSheet,
@@ -2582,7 +2615,7 @@ function runDailyCheck() {
           skippedFuture++;
         }
       } catch (e) {
-        setStatus(visaSheet, rowIndex, colMap.STATUS, STATUS.ERROR);
+        setResolvedStatus(visaSheet, rowIndex, colMap, tabName, STATUS.ERROR);
         appendLog(
           logsSheet,
           tabName,
@@ -3342,6 +3375,70 @@ function setStatus(sheet, rowIndex, statusColIndex, statusValue) {
   sheet.getRange(rowIndex, statusColIndex).setValue(statusValue);
 }
 
+function getDefaultStatusOptions() {
+  return [STATUS.ACTIVE, STATUS.SENT, STATUS.ERROR, STATUS.SKIPPED];
+}
+
+function getStatusOptionsForTab(sheet, tabName, colMap) {
+  if (!sheet || !colMap || !colMap.STATUS) return getDefaultStatusOptions();
+
+  var dataStartRow = getTabDataStartRow(tabName);
+  var sampleRow = Math.max(dataStartRow, 1);
+
+  try {
+    var rule = sheet.getRange(sampleRow, colMap.STATUS).getDataValidation();
+    if (!rule) return getDefaultStatusOptions();
+
+    var criteriaType = rule.getCriteriaType();
+    var criteriaValues = rule.getCriteriaValues();
+    if (
+      criteriaType !== SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST ||
+      !criteriaValues ||
+      !criteriaValues[0]
+    ) {
+      return getDefaultStatusOptions();
+    }
+
+    var options = criteriaValues[0]
+      .map(function (value) {
+        return String(value || "").trim();
+      })
+      .filter(function (value) {
+        return !!value;
+      });
+
+    return options.length > 0 ? options : getDefaultStatusOptions();
+  } catch (e) {
+    return getDefaultStatusOptions();
+  }
+}
+
+function resolveStatusValueForTab(sheet, tabName, colMap, desiredStatus) {
+  var target = String(desiredStatus || "").trim();
+  if (!target) return target;
+
+  var options = getStatusOptionsForTab(sheet, tabName, colMap);
+  var targetLower = target.toLowerCase();
+
+  for (var i = 0; i < options.length; i++) {
+    if (String(options[i] || "").trim().toLowerCase() === targetLower) {
+      return options[i];
+    }
+  }
+
+  return target;
+}
+
+function setResolvedStatus(sheet, rowIndex, colMap, tabName, desiredStatus) {
+  if (!colMap || !colMap.STATUS) return;
+  setStatus(
+    sheet,
+    rowIndex,
+    colMap.STATUS,
+    resolveStatusValueForTab(sheet, tabName, colMap, desiredStatus),
+  );
+}
+
 /**
  * Writes the sender account email to the Staff Email column after successful send.
  */
@@ -3392,6 +3489,43 @@ function writePostSendMetadata(sheet, rowIndex, colMap, meta) {
   clearCellValueIfColumn(sheet, rowIndex, colMap.REPLY_KEYWORD);
 }
 
+function applyReplyStatusValidation(sheet, tabName, colMap) {
+  if (!sheet || !colMap || !colMap.REPLY_STATUS) return;
+
+  var dataStartRow = getTabDataStartRow(tabName);
+  var lastRow = sheet.getLastRow();
+  var dataLastRow = Math.max(lastRow, dataStartRow + 100);
+  var replyRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([REPLY_STATUS.PENDING, REPLY_STATUS.REPLIED], true)
+    .setAllowInvalid(true)
+    .build();
+
+  sheet
+    .getRange(
+      dataStartRow,
+      colMap.REPLY_STATUS,
+      dataLastRow - dataStartRow + 1,
+      1,
+    )
+    .setDataValidation(replyRule);
+}
+
+function ensureReplyStatusColumn(sheet, tabName, colMap) {
+  if (!sheet || !colMap || !colMap.STATUS) return colMap || {};
+  if (colMap.REPLY_STATUS) {
+    applyReplyStatusValidation(sheet, tabName, colMap);
+    return colMap;
+  }
+
+  var headerRow = getTabHeaderRow(tabName);
+  sheet.insertColumnAfter(colMap.STATUS);
+  sheet.getRange(headerRow, colMap.STATUS + 1).setValue(HEADERS.REPLY_STATUS);
+
+  var updatedMap = buildColumnMap(sheet, tabName);
+  applyReplyStatusValidation(sheet, tabName, updatedMap);
+  return updatedMap;
+}
+
 function ensureColumnExists(sheet, tabName, logicalKey) {
   if (logicalKey && buildColumnMap(sheet, tabName)[logicalKey]) {
     return buildColumnMap(sheet, tabName)[logicalKey];
@@ -3401,6 +3535,18 @@ function ensureColumnExists(sheet, tabName, logicalKey) {
   var colIndex = sheet.getLastColumn() + 1;
   sheet.getRange(headerRow, colIndex).setValue(HEADERS[logicalKey]);
   return buildColumnMap(sheet, tabName)[logicalKey] || colIndex;
+}
+
+function ensureReplyMetadataColumns(sheet, tabName, colMap) {
+  var updatedMap = colMap || {};
+
+  updatedMap = ensureReplyStatusColumn(sheet, tabName, updatedMap);
+
+  if (!updatedMap.REPLIED_AT) {
+    updatedMap.REPLIED_AT = ensureColumnExists(sheet, tabName, "REPLIED_AT");
+  }
+
+  return buildColumnMap(sheet, tabName);
 }
 
 function ensureFinalNoticeColumns(sheet, tabName, colMap) {
@@ -4274,11 +4420,13 @@ function runReplyScan() {
       continue;
     }
 
-    if (!colMap.SENT_THREAD_ID || !colMap.REPLY_STATUS) {
+    colMap = ensureReplyStatusColumn(sheet, tabName, colMap);
+
+    if (!colMap.SENT_THREAD_ID) {
       var skipMsg =
         "[" +
         tabName +
-        '] Reply scan skipped: add "Sent Thread Id" and "Reply Status" columns.';
+        '] Reply scan skipped: add "Sent Thread Id" column.';
       appendLog(logsSheet, tabName, "", "INFO", skipMsg);
       tabSummaries.push(skipMsg);
       continue;
@@ -4339,6 +4487,8 @@ function runReplyScan() {
       scanned++;
       var match = findReplyMatchForRow(threadId, clientEmail, keywords, sentAt);
       if (!match) continue;
+
+      colMap = ensureReplyMetadataColumns(sheet, tabName, colMap);
 
       setCellValueIfColumn(
         sheet,
@@ -4493,6 +4643,7 @@ function showReplyTrackingStatus() {
     "Reply tracking schedule: " + (active > 0 ? "ACTIVE" : "INACTIVE"),
     "Trigger count: " + active,
     "Keywords: " + getReplyKeywords().join(", "),
+    "Reply Status column: auto-created next to Status when needed",
   ].join("\n");
   ui.alert("Reply Tracking Status", msg, ui.ButtonSet.OK);
 }
@@ -5560,6 +5711,7 @@ function diagnosticSendTestRow() {
     );
     var senderEmail = getSenderAccountEmail();
     setStaffEmail(sheet, rowNum, colMap.STAFF_EMAIL, senderEmail);
+    colMap = ensureReplyStatusColumn(sheet, tabName, colMap);
     writePostSendMetadata(sheet, rowNum, colMap, {
       sentAt: new Date(),
       senderEmail: senderEmail,
@@ -5567,6 +5719,17 @@ function diagnosticSendTestRow() {
       threadId: sentMeta.threadId,
       messageId: sentMeta.messageId,
     });
+    if (isSameDay(expiryDate, getMidnight(new Date()))) {
+      colMap = ensureFinalNoticeColumns(sheet, tabName, colMap);
+      writeFinalNoticeMetadata(sheet, rowNum, colMap, {
+        sentAt: new Date(),
+        threadId: sentMeta.threadId,
+        messageId: sentMeta.messageId,
+      });
+      setResolvedStatus(sheet, rowNum, colMap, tabName, STATUS.SENT);
+    } else {
+      setResolvedStatus(sheet, rowNum, colMap, tabName, STATUS.ACTIVE);
+    }
     appendLog(
       ensureLogsSheet(ss),
       sheetConfig.sheetName,
