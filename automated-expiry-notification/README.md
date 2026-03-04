@@ -67,7 +67,9 @@ This script helps teams avoid missed renewals by automating outreach while keepi
   - `[Client Name]`
   - `[Date of Expiration]`, `[Date of Expiry]`, `[Expiry Date]`
   - `[Document Type]`
-- Optional CC via `Staff Email`
+- Primary recipient comes from `Client Email`
+- Optional CC via the `CC Email` column
+- Optional default CC list via the `Initialize / Configure > Configure Default CC Emails` menu
 - Drive attachments from `Attached Files` (URLs or file IDs)
 
 ### 5) Post-Send Updates and Logging
