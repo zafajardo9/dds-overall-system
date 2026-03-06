@@ -106,6 +106,7 @@ var PROP_KEYS = {
   FALLBACK_TEMPLATE: "FALLBACK_TEMPLATE",
   OPEN_TRACKING_BASE_URL: "OPEN_TRACKING_BASE_URL",
   DEFAULT_CC_EMAILS: "DEFAULT_CC_EMAILS",
+  DAILY_TRIGGER_HOUR: "DAILY_TRIGGER_HOUR",
 };
 
 var AI_PROVIDER = {
@@ -307,7 +308,9 @@ var FLEXIBLE_HEADER_ALIASES = {
 function onOpen() {
   var ui = SpreadsheetApp.getUi();
   rememberSpreadsheetId(SpreadsheetApp.getActiveSpreadsheet());
-  ui.createMenu("Expiry Notifications")
+  ui.createMenu("🔔 Expiry Notifications")
+    .addItem("🚀 Setup This Sheet for Automation", "runSetupWizard")
+    .addSeparator()
     .addSubMenu(
       ui
         .createMenu("Status & Overview")
@@ -328,22 +331,14 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(
       ui
-        .createMenu("Run & Test")
-        .addItem("Run Manual Check Now", "manualRunNow")
-        .addItem("Preview Target Dates", "previewTargetDates")
-        .addItem("Inspect Row...", "diagnosticInspectRow")
-        .addItem("Send Test Email by No....", "diagnosticSendTestRow"),
-    )
-    .addSeparator()
-    .addSubMenu(
-      ui
         .createMenu("Automation Settings")
-        .addItem("Activate Daily Schedule (8 AM)", "installTrigger")
+        .addItem("Activate Daily Schedule", "installTrigger")
+        .addItem("Set Send Time", "setDailyTriggerHourDialog")
         .addItem("Deactivate Daily Schedule", "removeTrigger")
         .addItem("Set Default CC Emails", "setDefaultCcEmailsDialog")
         .addSeparator()
         .addItem("Set Reply Keywords", "setReplyKeywords")
-        .addItem("Activate Reply Scan (9 AM)", "installReplyScanTrigger")
+        .addItem("Activate Reply Scan (2x Daily)", "installReplyScanTrigger")
         .addItem("Deactivate Reply Scan", "removeReplyScanTrigger")
         .addSeparator()
         .addItem("Set Open Tracking URL", "setOpenTrackingBaseUrl"),
@@ -351,69 +346,22 @@ function onOpen() {
     .addSeparator()
     .addSubMenu(
       ui
-        .createMenu("AI Integration")
-        .addItem("Toggle AI Generation", "toggleAiGeneration")
-        .addItem("Set Gemini API Key", "setGeminiApiKey")
-        .addItem("Select Gemini Model", "selectGeminiModel")
-        .addItem("Test AI Connection", "testAiConnection")
-        .addItem("View AI Status", "showAiStatus")
+        .createMenu("Run & Diagnostics")
+        .addItem("Run Manual Check Now", "manualRunNow")
+        .addItem("Preview Target Dates", "previewTargetDates")
         .addSeparator()
-        .addItem("Set Fallback Template", "setFallbackTemplate")
-        .addItem("Toggle Fallback Source", "toggleFallbackTemplateSource"),
-    )
-    .addSeparator()
-    .addSubMenu(
-      ui
-        .createMenu("Diagnostics & Test")
-        .addSubMenu(
-          ui
-            .createMenu("Test Menu")
-            .addSubMenu(
-              ui
-                .createMenu("Connection Tests")
-                .addItem("Test Gmail Connection", "testGmailConnection")
-                .addItem("Test Drive Access", "testDriveAccess")
-                .addItem("Test AI API (Gemini)", "testAiConnection")
-                .addItem("Test All Connections", "testAllConnections"),
-            )
-            .addSeparator()
-            .addSubMenu(
-              ui
-                .createMenu("Sheet Diagnostics")
-                .addItem("Show All Tabs Info", "showAllTabsInfo")
-                .addItem(
-                  "Validate Active Tab Structure",
-                  "validateActiveTabStructure",
-                )
-                .addItem("Check Column Mappings", "checkColumnMappings")
-                .addItem("View Tab Configuration", "viewTabConfiguration"),
-            )
-            .addSeparator()
-            .addSubMenu(
-              ui
-                .createMenu("Email Diagnostics")
-                .addItem(
-                  "Preview Fallback Template",
-                  "previewFallbackTemplateBody",
-                )
-                .addItem("Test Email Rendering", "testEmailRendering")
-                .addItem(
-                  "Check Reply Tracking Setup",
-                  "checkReplyTrackingSetup",
-                ),
-            )
-            .addSeparator()
-            .addSubMenu(
-              ui
-                .createMenu("Data Validation")
-                .addItem("Validate Date Parsing", "validateDateParsing")
-                .addItem("Test Notice Options", "testNoticeOptions")
-                .addItem(
-                  "Check Attachment Resolution",
-                  "checkAttachmentResolution",
-                ),
-            ),
-        )
+        .addItem("Inspect Row...", "diagnosticInspectRow")
+        .addItem("Send Test Email by No....", "diagnosticSendTestRow")
+        .addSeparator()
+        .addItem("Test Gmail Send", "testGmailSend")
+        .addItem("Test Drive Access", "testDriveAccess")
+        .addItem("Test All Connections", "testAllConnections")
+        .addSeparator()
+        .addItem("Check Column Mappings", "checkColumnMappings")
+        .addItem("Validate Tab Structure", "validateActiveTabStructure")
+        .addItem("View Tab Configuration", "viewTabConfiguration")
+        .addItem("Check Reply Tracking Setup", "checkReplyTrackingSetup")
+        .addItem("Preview Fallback Template", "previewFallbackTemplateBody")
         .addSeparator()
         .addItem("System Diagnostics", "runSystemDiagnostics"),
     )
@@ -432,6 +380,392 @@ function onOpen() {
     .addToUi();
 }
 
+// ─── SETUP WIZARD ────────────────────────────────────────────────────────────
+
+/**
+ * Entry point for the guided setup wizard.
+ * Walks through: tab selection/creation → column check → dropdowns → schedule.
+ */
+function runSetupWizard() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  ui.alert(
+    "🚀 Setup This Sheet for Automation",
+    "Welcome! This wizard will guide you through setting up a sheet tab for the Expiry Notification automation.\n\nYou will:\n  Step 1 — Select or create a sheet tab\n  Step 2 — Verify column headers\n  Step 3 — Apply dropdowns\n  Step 4 — Activate the daily schedule\n\nClick OK to begin.",
+    ui.ButtonSet.OK,
+  );
+
+  var context = {
+    tabName: "",
+    sheet: null,
+    columnsOk: false,
+    dropsApplied: false,
+    scheduleActive: false,
+  };
+
+  context = wizardStep1Tab(ss, ui, context);
+  if (!context) return;
+
+  context = wizardStep2Columns(ss, ui, context);
+  if (!context) return;
+
+  context = wizardStep3Dropdowns(ss, ui, context);
+  if (!context) return;
+
+  context = wizardStep4Schedule(ui, context);
+  if (!context) return;
+
+  wizardStep5Summary(ui, context);
+}
+
+/**
+ * Wizard Step 1 — select an existing tab or create a new one.
+ */
+function wizardStep1Tab(ss, ui, context) {
+  var choice = ui.prompt(
+    "Step 1 of 4 — Sheet Tab",
+    "Which tab should be used for automation?\n\n  1. Use an existing tab\n  2. Create a new tab\n\nEnter 1 or 2:",
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (choice.getSelectedButton() !== ui.Button.OK) return null;
+
+  var input = choice.getResponseText().trim();
+
+  if (input === "2") {
+    // ── Create new tab ──
+    var nameResp = ui.prompt(
+      "Step 1 of 4 — Create New Tab",
+      "Enter a name for the new sheet tab:",
+      ui.ButtonSet.OK_CANCEL,
+    );
+    if (nameResp.getSelectedButton() !== ui.Button.OK) return null;
+
+    var newName = nameResp.getResponseText().trim();
+    if (!newName) {
+      ui.alert("No name entered. Setup cancelled.");
+      return null;
+    }
+
+    if (ss.getSheetByName(newName)) {
+      ui.alert(
+        'A tab named "' +
+          newName +
+          "\" already exists. Setup cancelled.\n\nRe-run the wizard and choose 'Use an existing tab' to configure it.",
+      );
+      return null;
+    }
+
+    var newSheet = ss.insertSheet(newName);
+
+    // Write required headers into row 1
+    var requiredHeaders = [
+      HEADERS.NO,
+      HEADERS.CLIENT_NAME,
+      HEADERS.CLIENT_EMAIL,
+      HEADERS.DOC_TYPE,
+      HEADERS.EXPIRY_DATE,
+      HEADERS.NOTICE_DATE,
+      HEADERS.REMARKS,
+      HEADERS.ATTACHMENTS,
+      HEADERS.STATUS,
+      HEADERS.STAFF_EMAIL,
+      HEADERS.SEND_MODE,
+    ];
+    newSheet
+      .getRange(1, 1, 1, requiredHeaders.length)
+      .setValues([requiredHeaders]);
+
+    // Bold + freeze header row
+    newSheet.getRange(1, 1, 1, requiredHeaders.length).setFontWeight("bold");
+    newSheet.setFrozenRows(1);
+
+    // Register tab
+    var existing = getConfiguredSheetNames();
+    if (existing.indexOf(newName) < 0) {
+      existing.push(newName);
+      setConfiguredSheetNames(existing);
+    }
+
+    // Set header row = 1, data start = 2
+    setTabHeaderRow(newName, 1);
+    setTabDataStartRow(newName, 2);
+
+    context.tabName = newName;
+    context.sheet = newSheet;
+
+    ui.alert(
+      "Step 1 Complete ✓",
+      'Tab "' + newName + '" created with headers.\n\nProceeding to Step 2.',
+      ui.ButtonSet.OK,
+    );
+    return context;
+  } else {
+    // ── Use existing tab ──
+    var sheets = ss.getSheets().filter(function (s) {
+      return s.getName() !== CONFIG.LOGS_SHEET_NAME;
+    });
+
+    var configuredNames = getConfiguredSheetNames();
+    var options = [];
+    for (var i = 0; i < sheets.length; i++) {
+      var marker =
+        configuredNames.indexOf(sheets[i].getName()) >= 0
+          ? " [already registered]"
+          : "";
+      options.push(i + 1 + ". " + sheets[i].getName() + marker);
+    }
+
+    var pickResp = ui.prompt(
+      "Step 1 of 4 — Select Existing Tab",
+      "Available tabs:\n\n" +
+        options.join("\n") +
+        "\n\nEnter the number of the tab to use:",
+      ui.ButtonSet.OK_CANCEL,
+    );
+    if (pickResp.getSelectedButton() !== ui.Button.OK) return null;
+
+    var idx = parseInt(pickResp.getResponseText().trim(), 10);
+    if (isNaN(idx) || idx < 1 || idx > sheets.length) {
+      ui.alert("Invalid selection. Setup cancelled.");
+      return null;
+    }
+
+    var selectedSheet = sheets[idx - 1];
+    var selectedName = selectedSheet.getName();
+
+    // Register if not already
+    if (configuredNames.indexOf(selectedName) < 0) {
+      configuredNames.push(selectedName);
+      setConfiguredSheetNames(configuredNames);
+    }
+
+    context.tabName = selectedName;
+    context.sheet = selectedSheet;
+
+    ui.alert(
+      "Step 1 Complete ✓",
+      'Tab "' + selectedName + '" registered.\n\nProceeding to Step 2.',
+      ui.ButtonSet.OK,
+    );
+    return context;
+  }
+}
+
+/**
+ * Wizard Step 2 — verify columns, offer manual mapping if needed.
+ */
+function wizardStep2Columns(ss, ui, context) {
+  var flexMap = buildFlexibleColumnMap(context.sheet, context.tabName);
+  var required = [
+    "CLIENT_NAME",
+    "CLIENT_EMAIL",
+    "EXPIRY_DATE",
+    "NOTICE_DATE",
+    "STATUS",
+  ];
+  var missing = [];
+  for (var i = 0; i < required.length; i++) {
+    if (!flexMap.map[required[i]]) missing.push(HEADERS[required[i]]);
+  }
+
+  if (missing.length === 0) {
+    context.columnsOk = true;
+    ui.alert(
+      "Step 2 Complete ✓",
+      "All required columns detected automatically.\n\nProceeding to Step 3.",
+      ui.ButtonSet.OK,
+    );
+    return context;
+  }
+
+  // Some columns missing
+  var mapNow = ui.alert(
+    "Step 2 of 4 — Column Check",
+    "The following required columns were not detected:\n\n  • " +
+      missing.join("\n  • ") +
+      "\n\nWould you like to map columns manually now?",
+    ui.ButtonSet.YES_NO,
+  );
+
+  if (mapNow === ui.Button.YES) {
+    mapTabColumns();
+    // Re-check after mapping
+    var recheck = buildFlexibleColumnMap(context.sheet, context.tabName);
+    var stillMissing = [];
+    for (var j = 0; j < required.length; j++) {
+      if (!recheck.map[required[j]]) stillMissing.push(HEADERS[required[j]]);
+    }
+    context.columnsOk = stillMissing.length === 0;
+  } else {
+    context.columnsOk = false;
+    ui.alert(
+      "Step 2 — Warning",
+      "Continuing without all required columns. The automation may not work correctly until columns are mapped.\n\nYou can fix this later via Tab Management → Map Tab Columns.",
+      ui.ButtonSet.OK,
+    );
+  }
+
+  return context;
+}
+
+/**
+ * Wizard Step 3 — apply dropdowns to Status, Send Mode, Notice Date.
+ */
+function wizardStep3Dropdowns(ss, ui, context) {
+  var apply = ui.alert(
+    "Step 3 of 4 — Dropdowns",
+    'Apply dropdown options to the Status, Send Mode, and Notice Date columns in "' +
+      context.tabName +
+      '"?\n\nThis makes data entry easier. Default values will be used.',
+    ui.ButtonSet.YES_NO,
+  );
+
+  if (apply !== ui.Button.YES) {
+    ui.alert(
+      "Step 3 Skipped",
+      "Dropdowns skipped. You can apply them later via Tab Management → Setup Tab Dropdowns.",
+      ui.ButtonSet.OK,
+    );
+    context.dropsApplied = false;
+    return context;
+  }
+
+  var sheet = context.sheet;
+  var tabName = context.tabName;
+  var colMap = buildColumnMap(sheet, tabName);
+  var dataStartRow = getTabDataStartRow(tabName);
+  var lastRow = sheet.getLastRow();
+  var dataLastRow = Math.max(lastRow, dataStartRow + 100);
+  var applied = [];
+
+  if (colMap.STATUS) {
+    var statusRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(
+        [STATUS.ACTIVE, STATUS.SENT, STATUS.ERROR, STATUS.SKIPPED],
+        true,
+      )
+      .setAllowInvalid(true)
+      .build();
+    sheet
+      .getRange(dataStartRow, colMap.STATUS, dataLastRow - dataStartRow + 1, 1)
+      .setDataValidation(statusRule);
+    applied.push("Status");
+  }
+
+  if (colMap.SEND_MODE) {
+    var sendModeRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(
+        [SEND_MODE.AUTO, SEND_MODE.HOLD, SEND_MODE.MANUAL_ONLY],
+        true,
+      )
+      .setAllowInvalid(true)
+      .build();
+    sheet
+      .getRange(
+        dataStartRow,
+        colMap.SEND_MODE,
+        dataLastRow - dataStartRow + 1,
+        1,
+      )
+      .setDataValidation(sendModeRule);
+    applied.push("Send Mode");
+  }
+
+  if (colMap.NOTICE_DATE) {
+    var noticeOptions = getNoticeOptionsForTab(tabName);
+    var noticeRule = SpreadsheetApp.newDataValidation()
+      .requireValueInList(noticeOptions, true)
+      .setAllowInvalid(true)
+      .build();
+    sheet
+      .getRange(
+        dataStartRow,
+        colMap.NOTICE_DATE,
+        dataLastRow - dataStartRow + 1,
+        1,
+      )
+      .setDataValidation(noticeRule);
+    applied.push("Notice Date");
+  }
+
+  context.dropsApplied = applied.length > 0;
+
+  ui.alert(
+    "Step 3 Complete ✓",
+    applied.length > 0
+      ? "Dropdowns applied to: " +
+          applied.join(", ") +
+          ".\n\nProceeding to Step 4."
+      : "No matching columns found for dropdowns. You can retry later.\n\nProceeding to Step 4.",
+    ui.ButtonSet.OK,
+  );
+
+  return context;
+}
+
+/**
+ * Wizard Step 4 — offer to activate the daily 8 AM trigger.
+ */
+function wizardStep4Schedule(ui, context) {
+  var triggerCount = getTriggersByHandler("runDailyCheck").length;
+  var currentStatus =
+    triggerCount > 0
+      ? "ACTIVE (" + triggerCount + " trigger already set)"
+      : "INACTIVE";
+
+  var activate = ui.alert(
+    "Step 4 of 4 — Daily Schedule",
+    "Current daily schedule status: " +
+      currentStatus +
+      "\n\nActivate the daily 8 AM email schedule now?",
+    ui.ButtonSet.YES_NO,
+  );
+
+  if (activate === ui.Button.YES) {
+    if (triggerCount === 0) {
+      installTrigger();
+    }
+    context.scheduleActive = true;
+  } else {
+    context.scheduleActive = triggerCount > 0;
+    ui.alert(
+      "Step 4 Skipped",
+      "Schedule not changed. You can activate it later via Automation Settings → Activate Daily Schedule.",
+      ui.ButtonSet.OK,
+    );
+  }
+
+  return context;
+}
+
+/**
+ * Wizard Step 5 — summary alert.
+ */
+function wizardStep5Summary(ui, context) {
+  var lines = [
+    "✅ Setup Complete!",
+    "",
+    "Tab:             " + context.tabName,
+    "Columns:         " +
+      (context.columnsOk
+        ? "✓ All required columns OK"
+        : "⚠ Some columns missing — map them via Tab Management"),
+    "Dropdowns:       " + (context.dropsApplied ? "✓ Applied" : "— Skipped"),
+    "Daily Schedule:  " +
+      (context.scheduleActive ? "✓ Active" : "— Not activated"),
+    "",
+    "You're ready to go!",
+    'Add your client data to the "' +
+      context.tabName +
+      '" tab and the automation will handle the rest.',
+  ];
+
+  ui.alert("🚀 Setup Complete", lines.join("\n"), ui.ButtonSet.OK);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * Shows comprehensive system status across all configured tabs.
  */
@@ -443,7 +777,6 @@ function showSystemStatus() {
   var sheetConfigs = resolveAutomationSheets(ss);
   var triggerCount = getTriggersByHandler("runDailyCheck").length;
   var replyTriggerCount = getTriggersByHandler("runReplyScan").length;
-  var aiEnabled = isAiGenerationEnabled();
 
   var lines = [
     "=== System Status ===",
@@ -454,7 +787,6 @@ function showSystemStatus() {
       (replyTriggerCount > 0
         ? "ACTIVE (" + replyTriggerCount + " trigger)"
         : "INACTIVE"),
-    "AI Integration: " + (aiEnabled ? "ENABLED" : "DISABLED"),
     "",
     "=== Configured Tabs (" + sheetConfigs.length + ") ===",
     "",
@@ -668,24 +1000,65 @@ function getWorkingTabConfig(ss) {
 }
 
 /**
- * Tests Gmail connection by attempting to get inbox info.
+ * Sends a real test email to a user-specified recipient to confirm Gmail sending works.
  */
-function testGmailConnection() {
+function testGmailSend() {
   var ui = SpreadsheetApp.getUi();
-  try {
-    var threads = GmailApp.getInboxThreads(0, 1);
-    var email = getSenderAccountEmail();
+  var senderEmail = getSenderAccountEmail();
+  var senderName = getSenderDisplayName(senderEmail);
+
+  var response = ui.prompt(
+    "Test Gmail Send",
+    "Sending from: " +
+      (senderEmail || "(unknown)") +
+      "\n\nEnter recipient email address:",
+    ui.ButtonSet.OK_CANCEL,
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+
+  var recipient = response.getResponseText().trim();
+  if (!recipient || !isValidEmail(recipient)) {
     ui.alert(
-      "Gmail Connection Test",
-      "✓ Gmail connection successful!\n\nAccount: " +
-        (email || "Unknown") +
-        "\nInbox accessible: YES",
+      "Test Gmail Send",
+      "Invalid or empty email address. Aborted.",
+      ui.ButtonSet.OK,
+    );
+    return;
+  }
+
+  var now = new Date();
+  var subject = "[TEST] Expiry Notification – Connection Test";
+  var htmlBody =
+    '<div style="font-family:Arial,sans-serif;font-size:14px;color:#333;max-width:600px;line-height:1.6;">' +
+    "<p>This is a <strong>test email</strong> sent from the Expiry Notification automation.</p>" +
+    "<p>If you received this, Gmail sending is working correctly.</p>" +
+    '<hr style="border:none;border-top:1px solid #eee;margin:16px 0;">' +
+    '<p style="font-size:12px;color:#888;">' +
+    "Sent by: " +
+    sanitizeHtmlContent(senderEmail || "(unknown)") +
+    "<br>" +
+    "Timestamp: " +
+    now.toLocaleString() +
+    "</p></div>";
+
+  try {
+    GmailApp.sendEmail(recipient, subject, "", {
+      htmlBody: htmlBody,
+      name: senderName || CONFIG.SENDER_NAME,
+    });
+    ui.alert(
+      "Test Gmail Send",
+      "✓ Test email sent successfully!\n\nFrom: " +
+        (senderEmail || "(unknown)") +
+        "\nTo: " +
+        recipient,
       ui.ButtonSet.OK,
     );
   } catch (e) {
     ui.alert(
-      "Gmail Connection Test",
-      "✗ Gmail connection failed:\n" + e.message,
+      "Test Gmail Send",
+      "✗ Failed to send test email:\n" + e.message,
       ui.ButtonSet.OK,
     );
   }
@@ -718,39 +1091,46 @@ function testDriveAccess() {
 }
 
 /**
- * Runs all connection tests.
+ * Runs all connection tests (Gmail service + Drive access).
  */
 function testAllConnections() {
   var ui = SpreadsheetApp.getUi();
   var results = [];
 
-  // Test Gmail
+  // Test Gmail service availability
   try {
-    GmailApp.getInboxThreads(0, 1);
-    results.push("✓ Gmail: OK");
+    var senderEmail = getSenderAccountEmail();
+    results.push(
+      "✓ Gmail: accessible (" + (senderEmail || "unknown account") + ")",
+    );
   } catch (e) {
     results.push("✗ Gmail: " + e.message);
   }
 
   // Test Drive
   try {
-    DriveApp.getRootFolder();
-    results.push("✓ Drive: OK");
+    var root = DriveApp.getRootFolder();
+    results.push("✓ Drive: accessible (" + root.getName() + ")");
   } catch (e) {
     results.push("✗ Drive: " + e.message);
   }
 
-  // Test AI
-  var aiResult = tryGenerateAiEmailBody("Test", new Date(), "Visa");
-  if (aiResult && aiResult.text) {
-    results.push("✓ AI (Gemini): OK");
-  } else {
-    var hasKey = !!getAiApiKey();
+  // Check configured tabs
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var configs = resolveAutomationSheets(ss);
+    var found = configs.filter(function (c) {
+      return !!c.sheet;
+    }).length;
     results.push(
-      "⚠ AI (Gemini): " +
-        (hasKey ? "Test generation failed" : "No API key set"),
+      "✓ Automation tabs: " + found + "/" + configs.length + " found",
     );
+  } catch (e) {
+    results.push("✗ Tabs: " + e.message);
   }
+
+  results.push("");
+  results.push("Use 'Test Gmail Send' to confirm actual email delivery.");
 
   ui.alert("All Connection Tests", results.join("\n"), ui.ButtonSet.OK);
 }
@@ -1214,18 +1594,6 @@ function viewTabConfiguration() {
 }
 
 /**
- * Placeholder for email rendering test.
- */
-function testEmailRendering() {
-  var ui = SpreadsheetApp.getUi();
-  ui.alert(
-    "Test Email Rendering",
-    "This would show a preview of email rendering with sample data.\n\nUse 'Preview Fallback Template' or 'Send Test Email' for actual testing.",
-    ui.ButtonSet.OK,
-  );
-}
-
-/**
  * Check reply tracking setup.
  */
 function checkReplyTrackingSetup() {
@@ -1368,18 +1736,6 @@ function testNoticeOptions() {
 }
 
 /**
- * Check attachment resolution.
- */
-function checkAttachmentResolution() {
-  var ui = SpreadsheetApp.getUi();
-  ui.alert(
-    "Attachment Resolution",
-    "Tests Drive file ID extraction and blob fetching.\n\nTo test, use 'Inspect Row' on a row with attachments.",
-    ui.ButtonSet.OK,
-  );
-}
-
-/**
  * Run comprehensive system diagnostics.
  */
 function runSystemDiagnostics() {
@@ -1425,12 +1781,6 @@ function runSystemDiagnostics() {
   var props = getAutomationProperties();
   var propKeys = props.getKeys();
   results.push("✓ Stored properties: " + propKeys.length);
-
-  // Check AI
-  var hasKey = !!getAiApiKey();
-  var aiEnabled = isAiGenerationEnabled();
-  results.push("✓ AI API key: " + (hasKey ? "Set" : "Not set"));
-  results.push("✓ AI enabled: " + (aiEnabled ? "Yes" : "No"));
 
   ui.alert("System Diagnostics", results.join("\n"), ui.ButtonSet.OK);
 }
@@ -1913,6 +2263,11 @@ function normalizeEmailList(value) {
   return result;
 }
 
+function parseClientEmails(rawValue) {
+  var list = normalizeEmailList(rawValue);
+  return list.length > 0 ? list : [];
+}
+
 function validateEmailList(emails) {
   var invalid = [];
   for (var i = 0; i < emails.length; i++) {
@@ -1961,16 +2316,20 @@ function setDefaultCcEmails(emails) {
   setPropString(PROP_KEYS.DEFAULT_CC_EMAILS, JSON.stringify(normalized));
 }
 
-function resolveCcEmails(clientEmail, staffEmail) {
+function resolveCcEmails(clientEmails, staffEmail) {
   var combined = mergeUniqueEmails(getDefaultCcEmails(), staffEmail);
-  var clientKey = String(clientEmail || "")
-    .trim()
-    .toLowerCase();
-  if (!clientKey) return combined;
+  var clientList = Array.isArray(clientEmails)
+    ? clientEmails
+    : normalizeEmailList(clientEmails);
+  var clientKeys = {};
+  for (var k = 0; k < clientList.length; k++) {
+    clientKeys[clientList[k].toLowerCase()] = true;
+  }
+  if (Object.keys(clientKeys).length === 0) return combined;
 
   var filtered = [];
   for (var i = 0; i < combined.length; i++) {
-    if (combined[i].toLowerCase() !== clientKey) filtered.push(combined[i]);
+    if (!clientKeys[combined[i].toLowerCase()]) filtered.push(combined[i]);
   }
   return filtered;
 }
@@ -2165,20 +2524,20 @@ function checkScheduleStatus() {
   var active = getTriggersByHandler("runDailyCheck");
   var replyTriggers = getTriggersByHandler("runReplyScan");
 
+  var configuredHour = getDailyTriggerHour();
   var msg;
   if (active.length === 0) {
     msg =
-      "Status: INACTIVE\n\nNo daily schedule is set up.\nUse 'Activate Daily Schedule (8 AM)' to enable it.";
+      "Status: INACTIVE\n\nNo daily schedule is set up.\nConfigured send time: " +
+      configuredHour +
+      ":00\nUse 'Activate Daily Schedule' to enable it.";
   } else {
-    var lines = ["Status: ACTIVE", "", active.length + " trigger(s) found:"];
-    for (var j = 0; j < active.length; j++) {
-      var t = active[j];
-      lines.push(
-        "  - Runs daily at " +
-          CONFIG.TRIGGER_HOUR +
-          ":00 Philippine Time (Asia/Manila)",
-      );
-    }
+    var lines = [
+      "Status: ACTIVE",
+      "",
+      "Send time: " + configuredHour + ":00 Philippine Time (Asia/Manila)",
+      active.length + " trigger(s) active.",
+    ];
     if (active.length > 1) {
       lines.push("");
       lines.push(
@@ -2217,16 +2576,8 @@ function checkScheduleStatus() {
     (replyTriggers.length > 0
       ? "ACTIVE (" +
         replyTriggers.length +
-        " trigger(s), " +
-        CONFIG.REPLY_SCAN_TRIGGER_HOUR +
-        ":00 Asia/Manila)"
-      : "INACTIVE");
-
-  msg +=
-    "\nAI generation: " +
-    (isAiGenerationEnabled() ? "ENABLED" : "DISABLED") +
-    " | Model: " +
-    getAiModel();
+        " trigger(s) — 9:00 AM & 3:00 PM Asia/Manila)"
+      : "INACTIVE (use Automation Settings → Activate Reply Scan)");
 
   msg += "\n\n" + getLatestRunSummary(logsSheet);
   ui.alert("Daily Schedule Status", msg, ui.ButtonSet.OK);
@@ -2375,6 +2726,16 @@ function runDailyCheck() {
 
     var numDataRows = lastRow - dataStartRow + 1;
     var numCols = visaSheet.getLastColumn();
+    if (numCols === 0) {
+      appendLog(
+        logsSheet,
+        tabName,
+        "",
+        "INFO",
+        "[" + tabName + "] Tab has no columns. Skipping.",
+      );
+      continue;
+    }
     var data = visaSheet
       .getRange(dataStartRow, 1, numDataRows, numCols)
       .getValues();
@@ -2391,7 +2752,8 @@ function runDailyCheck() {
       var rowIndex = dataStartRow + i;
 
       var clientName = getCellStr(row, colMap.CLIENT_NAME);
-      var clientEmail = getCellStr(row, colMap.CLIENT_EMAIL);
+      var clientEmailRaw = getCellStr(row, colMap.CLIENT_EMAIL);
+      var clientEmailList = parseClientEmails(clientEmailRaw);
       var staffEmail = getCellStr(row, colMap.STAFF_EMAIL);
       var docType = getCellStr(row, colMap.DOC_TYPE);
       var expiryRaw = colMap.EXPIRY_DATE ? row[colMap.EXPIRY_DATE - 1] : "";
@@ -2404,21 +2766,31 @@ function runDailyCheck() {
       if (!isProcessableStatus(status)) continue;
 
       if (isStatusBlank(status)) {
-        setResolvedStatus(visaSheet, rowIndex, colMap, tabName, STATUS.ACTIVE);
-        status = resolveStatusValueForTab(
-          visaSheet,
-          tabName,
-          colMap,
-          STATUS.ACTIVE,
-        );
-        autoActivated++;
-        appendLog(
-          logsSheet,
-          tabName,
-          clientName,
-          "INFO",
-          "Blank Status auto-set to Active for processing.",
-        );
+        if (colMap.STATUS) {
+          setResolvedStatus(
+            visaSheet,
+            rowIndex,
+            colMap,
+            tabName,
+            STATUS.ACTIVE,
+          );
+          status = resolveStatusValueForTab(
+            visaSheet,
+            tabName,
+            colMap,
+            STATUS.ACTIVE,
+          );
+          autoActivated++;
+          appendLog(
+            logsSheet,
+            tabName,
+            clientName,
+            "INFO",
+            "Blank Status auto-set to Active for processing.",
+          );
+        } else {
+          status = STATUS.ACTIVE;
+        }
       }
 
       var modeSkipReason = getSendModeSkipReason(sendMode);
@@ -2432,7 +2804,7 @@ function runDailyCheck() {
 
       var missing = [];
       if (!clientName) missing.push("Client Name");
-      if (!clientEmail) missing.push("Client Email");
+      if (clientEmailList.length === 0) missing.push("Client Email");
       if (!expiryRaw) missing.push("Expiry Date");
       if (!noticeStr) missing.push("Notice Date");
       if (missing.length > 0) {
@@ -2514,8 +2886,9 @@ function runDailyCheck() {
           "Attachment warning(s): " + attachResult.warnings.join("; "),
         );
       }
-      var ccEmails = resolveCcEmails(clientEmail, staffEmail);
+      var ccEmails = resolveCcEmails(clientEmailList, staffEmail);
       var baseSubject = buildEmailSubject(docType, clientName, expiryDate);
+      var clientEmailDisplay = clientEmailList.join(", ");
 
       try {
         var sentThisRow = false;
@@ -2530,13 +2903,26 @@ function runDailyCheck() {
             noticeToken,
             "notice",
           );
-          var noticeMeta = sendReminderEmail(
-            clientEmail,
-            ccEmails,
-            buildStageSubject(baseSubject, "notice"),
-            noticeContent.htmlBody,
-            attachResult.blobs,
+          var noticeSubject = buildStageSubject(baseSubject, "notice");
+          var displayName = getSenderDisplayName(senderEmail);
+          var noticeFallbackHtml = buildFallbackLinksHtml(
+            attachResult.failedLinks,
           );
+          var noticeHtmlBody = noticeFallbackHtml
+            ? noticeContent.htmlBody + noticeFallbackHtml
+            : noticeContent.htmlBody;
+          var noticeMeta = { threadId: "", messageId: "" };
+          for (var ei = 0; ei < clientEmailList.length; ei++) {
+            var eMeta = sendReminderEmail(
+              clientEmailList[ei],
+              ccEmails,
+              noticeSubject,
+              noticeHtmlBody,
+              attachResult.blobs,
+              displayName,
+            );
+            if (ei === 0) noticeMeta = eMeta;
+          }
 
           colMap = ensureReplyStatusColumn(visaSheet, tabName, colMap);
           writePostSendMetadata(visaSheet, rowIndex, colMap, {
@@ -2579,7 +2965,7 @@ function runDailyCheck() {
             clientName,
             sameDayFinal ? "SENT_NOTICE_FINAL" : "SENT_NOTICE",
             "Email sent to " +
-              clientEmail +
+              clientEmailDisplay +
               (ccEmails.length > 0
                 ? " (CC: " + ccEmails.join(", ") + ")"
                 : "") +
@@ -2610,13 +2996,25 @@ function runDailyCheck() {
             finalToken,
             "final",
           );
-          var finalMeta = sendReminderEmail(
-            clientEmail,
-            ccEmails,
-            buildStageSubject(baseSubject, "final"),
-            finalContent.htmlBody,
-            attachResult.blobs,
+          var finalSubject = buildStageSubject(baseSubject, "final");
+          var finalFallbackHtml = buildFallbackLinksHtml(
+            attachResult.failedLinks,
           );
+          var finalHtmlBody = finalFallbackHtml
+            ? finalContent.htmlBody + finalFallbackHtml
+            : finalContent.htmlBody;
+          var finalMeta = { threadId: "", messageId: "" };
+          for (var fi = 0; fi < clientEmailList.length; fi++) {
+            var fMeta = sendReminderEmail(
+              clientEmailList[fi],
+              ccEmails,
+              finalSubject,
+              finalHtmlBody,
+              attachResult.blobs,
+              displayName,
+            );
+            if (fi === 0) finalMeta = fMeta;
+          }
 
           writeFinalNoticeMetadata(visaSheet, rowIndex, colMap, {
             sentAt: new Date(),
@@ -2650,7 +3048,7 @@ function runDailyCheck() {
             clientName,
             "SENT_FINAL",
             "Email sent to " +
-              clientEmail +
+              clientEmailDisplay +
               (ccEmails.length > 0
                 ? " (CC: " + ccEmails.join(", ") + ")"
                 : "") +
@@ -3697,6 +4095,18 @@ function getSenderAccountEmail() {
   return "";
 }
 
+function getSenderDisplayName(email) {
+  var raw = String(email || "").trim();
+  var atIndex = raw.indexOf("@");
+  if (atIndex < 0) return CONFIG.SENDER_NAME;
+
+  var domain = raw.slice(atIndex + 1);
+  var domainBase = domain.split(".")[0];
+  if (!domainBase) return CONFIG.SENDER_NAME;
+
+  return domainBase.charAt(0).toUpperCase() + domainBase.slice(1).toLowerCase();
+}
+
 /**
  * Returns a new Date set to midnight (00:00:00.000) for the given date.
  */
@@ -3913,16 +4323,17 @@ function splitAttachmentEntries(rawField) {
  */
 function resolveAttachments(rawField) {
   if (!rawField || rawField.trim() === "") {
-    return { blobs: [], warnings: [], fatalError: null };
+    return { blobs: [], warnings: [], failedLinks: [], fatalError: null };
   }
 
   var entries = splitAttachmentEntries(rawField);
   if (entries.length === 0) {
-    return { blobs: [], warnings: [], fatalError: null };
+    return { blobs: [], warnings: [], failedLinks: [], fatalError: null };
   }
 
   var blobs = [];
   var warnings = [];
+  var failedLinks = [];
 
   for (var i = 0; i < entries.length; i++) {
     var entry = entries[i];
@@ -3930,6 +4341,7 @@ function resolveAttachments(rawField) {
 
     if (!fileId) {
       warnings.push('Cannot parse Drive file ID from: "' + entry + '"');
+      failedLinks.push({ label: entry, url: null });
       continue;
     }
 
@@ -3944,10 +4356,48 @@ function resolveAttachments(rawField) {
       warnings.push(
         "File not found or inaccessible (ID: " + fileId + "): " + e.message,
       );
+      var originalUrl =
+        entry.indexOf("drive.google.com") >= 0
+          ? entry
+          : "https://drive.google.com/file/d/" + fileId + "/view";
+      failedLinks.push({ label: fileId, url: originalUrl });
     }
   }
 
-  return { blobs: blobs, warnings: warnings, fatalError: null };
+  return {
+    blobs: blobs,
+    warnings: warnings,
+    failedLinks: failedLinks,
+    fatalError: null,
+  };
+}
+
+function buildFallbackLinksHtml(failedLinks) {
+  if (!failedLinks || failedLinks.length === 0) return "";
+
+  var items = [];
+  for (var i = 0; i < failedLinks.length; i++) {
+    var fl = failedLinks[i];
+    if (fl.url) {
+      items.push(
+        '<li><a href="' +
+          sanitizeHtmlAttribute(fl.url) +
+          '" target="_blank" rel="noopener noreferrer">' +
+          sanitizeHtmlContent(fl.label) +
+          "</a></li>",
+      );
+    } else {
+      items.push("<li>" + sanitizeHtmlContent(fl.label) + "</li>");
+    }
+  }
+
+  return (
+    '<div style="margin-top:16px;padding:12px;background:#fff8e1;border-left:3px solid #f9a825;font-size:13px;">' +
+    '<p style="margin:0 0 8px 0;font-weight:bold;color:#7a5c00;">Some files could not be attached. You can access them via the links below:</p>' +
+    '<ul style="margin:0;padding-left:20px;">' +
+    items.join("") +
+    "</ul></div>"
+  );
 }
 
 /**
@@ -4004,24 +4454,14 @@ function buildEmailContent(
     );
     source = "Remarks";
   } else {
-    var aiResult = null;
-    if (isAiGenerationEnabled()) {
-      aiResult = tryGenerateAiEmailBody(clientName, expiryDate, docTypeText);
-    }
-
-    if (aiResult && aiResult.text) {
-      bodyText = aiResult.text;
-      source = "AI(" + aiResult.model + ")";
-    } else {
-      var fallback = resolveFallbackTemplateText();
-      bodyText = applyTemplatePlaceholders(
-        fallback.text,
-        clientName,
-        expiryStr,
-        docTypeText,
-      );
-      source = fallback.source;
-    }
+    var fallback = resolveFallbackTemplateText();
+    bodyText = applyTemplatePlaceholders(
+      fallback.text,
+      clientName,
+      expiryStr,
+      docTypeText,
+    );
+    source = fallback.source;
   }
 
   var htmlBody = String(bodyText || "").replace(/\n/g, "<br>");
@@ -4034,11 +4474,22 @@ function buildEmailContent(
   }
   htmlBody = injectOpenTrackingPixel(htmlBody, openToken);
 
+  // Build reply acknowledgement phrase block
+  var replyKeywords = getReplyKeywords();
+  var replyPhrase = replyKeywords.length > 0 ? replyKeywords[0] : "RECEIVED";
+  var replyPhraseHtml =
+    '<div style="margin-top:20px;padding:12px 16px;background:#f0f7ff;border-left:4px solid #1a73e8;font-size:14px;color:#333;">' +
+    'Kindly reply <strong><u>"' +
+    sanitizeHtmlContent(replyPhrase) +
+    '"</u></strong> to confirm that you have received and read this reminder.' +
+    "</div>";
+
   htmlBody = [
     '<div style="font-family:Arial,sans-serif;font-size:14px;color:#333;max-width:600px;line-height:1.6;">',
     htmlBody,
+    replyPhraseHtml,
     '<hr style="border:none;border-top:1px solid #eee;margin:24px 0;">',
-    '<p style="font-size:11px;color:#999;">This is an automated reminder. Please do not reply directly to this email.</p>',
+    '<p style="font-size:11px;color:#999;">This is an automated reminder. Reply with the phrase above to acknowledge receipt.</p>',
     "</div>",
   ].join("\n");
 
@@ -4238,10 +4689,11 @@ function sendReminderEmail(
   subject,
   htmlBody,
   blobItems,
+  senderName,
 ) {
   var options = {
     htmlBody: htmlBody,
-    name: CONFIG.SENDER_NAME,
+    name: senderName || CONFIG.SENDER_NAME,
   };
 
   var normalizedCc = normalizeEmailList(ccEmails);
@@ -4371,20 +4823,62 @@ function appendLog(logsSheet, tabName, clientName, action, detail) {
   }
 }
 
+/**
+ * Returns the configured daily trigger hour (defaults to CONFIG.TRIGGER_HOUR).
+ */
+function getDailyTriggerHour() {
+  var stored = getPropString(PROP_KEYS.DAILY_TRIGGER_HOUR, "");
+  var parsed = parseInt(stored, 10);
+  return !isNaN(parsed) && parsed >= 0 && parsed <= 23
+    ? parsed
+    : CONFIG.TRIGGER_HOUR;
+}
+
+/**
+ * Dialog to let the user set the daily send time.
+ */
+function setDailyTriggerHourDialog() {
+  var ui = SpreadsheetApp.getUi();
+  var current = getDailyTriggerHour();
+  var response = ui.prompt(
+    "Set Daily Send Time",
+    "Enter the hour (0–23) for the daily email schedule.\n\nExamples: 8 = 8:00 AM, 14 = 2:00 PM\n\nCurrent: " +
+      current +
+      ":00",
+    ui.ButtonSet.OK_CANCEL,
+  );
+  if (response.getSelectedButton() !== ui.Button.OK) return;
+  var input = parseInt(response.getResponseText().trim(), 10);
+  if (isNaN(input) || input < 0 || input > 23) {
+    ui.alert("Invalid hour. Please enter a number between 0 and 23.");
+    return;
+  }
+  setPropString(PROP_KEYS.DAILY_TRIGGER_HOUR, String(input));
+  ui.alert(
+    "Send Time Updated",
+    "Daily send time set to " +
+      input +
+      ":00 Philippine Time.\n\nClick 'Activate Daily Schedule' to apply the new time.",
+    ui.ButtonSet.OK,
+  );
+}
+
 function installTrigger() {
   rememberSpreadsheetId(SpreadsheetApp.getActiveSpreadsheet());
   removeTrigger();
 
+  var hour = getDailyTriggerHour();
+
   ScriptApp.newTrigger("runDailyCheck")
     .timeBased()
     .everyDays(1)
-    .atHour(CONFIG.TRIGGER_HOUR)
+    .atHour(hour)
     .inTimezone("Asia/Manila")
     .create();
 
   var msg =
     "Daily schedule activated. runDailyCheck() will run automatically every day at " +
-    CONFIG.TRIGGER_HOUR +
+    hour +
     ":00 Philippine Time (Asia/Manila).";
   Logger.log(msg);
   try {
@@ -4397,22 +4891,28 @@ function installTrigger() {
 }
 
 /**
- * Installs daily reply scan trigger.
+ * Installs two daily reply scan triggers: 9 AM and 3 PM.
  */
 function installReplyScanTrigger() {
   rememberSpreadsheetId(SpreadsheetApp.getActiveSpreadsheet());
   removeReplyScanTrigger();
+
   ScriptApp.newTrigger("runReplyScan")
     .timeBased()
     .everyDays(1)
-    .atHour(CONFIG.REPLY_SCAN_TRIGGER_HOUR)
+    .atHour(9)
+    .inTimezone("Asia/Manila")
+    .create();
+
+  ScriptApp.newTrigger("runReplyScan")
+    .timeBased()
+    .everyDays(1)
+    .atHour(15)
     .inTimezone("Asia/Manila")
     .create();
 
   var msg =
-    "Reply scan schedule activated at " +
-    CONFIG.REPLY_SCAN_TRIGGER_HOUR +
-    ":00 Asia/Manila.";
+    "Reply scan activated: runs twice daily at 9:00 AM and 3:00 PM Philippine Time.";
   try {
     SpreadsheetApp.getUi().alert(
       "Reply Tracking",
@@ -4531,6 +5031,16 @@ function runReplyScan() {
 
     var numDataRows = lastRow - dataStartRow + 1;
     var numCols = sheet.getLastColumn();
+    if (numCols === 0) {
+      appendLog(
+        logsSheet,
+        tabName,
+        "",
+        "INFO",
+        "[" + tabName + "] Tab has no columns. Skipping reply scan.",
+      );
+      continue;
+    }
     var data = sheet
       .getRange(dataStartRow, 1, numDataRows, numCols)
       .getValues();
@@ -5196,6 +5706,13 @@ function doGet(e) {
 /**
  * Sanitizes HTML attribute values in lightweight redirect responses.
  */
+function sanitizeHtmlContent(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function sanitizeHtmlAttribute(value) {
   return String(value || "").replace(/["<>]/g, "");
 }
@@ -5500,7 +6017,10 @@ function diagnosticInspectRow() {
   var row = sheet.getRange(rowNum, 1, 1, numCols).getValues()[0];
 
   var clientName = getCellStr(row, colMap.CLIENT_NAME);
-  var clientEmail = getCellStr(row, colMap.CLIENT_EMAIL);
+  var clientEmailRaw = getCellStr(row, colMap.CLIENT_EMAIL);
+  var clientEmailList = parseClientEmails(clientEmailRaw);
+  var clientEmailDisplay =
+    clientEmailList.length > 0 ? clientEmailList.join(", ") : "(empty)";
   var staffEmail = getCellStr(row, colMap.STAFF_EMAIL);
   var docType = getCellStr(row, colMap.DOC_TYPE);
   var expiryRaw = colMap.EXPIRY_DATE ? row[colMap.EXPIRY_DATE - 1] : "";
@@ -5521,7 +6041,7 @@ function diagnosticInspectRow() {
   var finalNoticeMessageId = getCellStr(row, colMap.FINAL_NOTICE_MESSAGE_ID);
   var openToken = getCellStr(row, colMap.OPEN_TOKEN);
   var openCount = colMap.OPEN_COUNT ? row[colMap.OPEN_COUNT - 1] : "";
-  var effectiveCc = resolveCcEmails(clientEmail, staffEmail);
+  var effectiveCc = resolveCcEmails(clientEmailList, staffEmail);
 
   var expiryDate = expiryRaw instanceof Date ? expiryRaw : new Date(expiryRaw);
   var expiryStr = isNaN(expiryDate.getTime())
@@ -5605,7 +6125,7 @@ function diagnosticInspectRow() {
     "Replied At: " + (repliedAt || "(empty)"),
     "",
     "Client Name:  " + (clientName || "(empty)"),
-    "Client Email: " + (clientEmail || "(empty)"),
+    "Client Email: " + clientEmailDisplay,
     "Staff Email:  " + (staffEmail || "(empty)"),
     "Effective CC: " + formatCcDisplay(effectiveCc),
     "Doc Type:     " + (docType || "(empty)"),
@@ -5702,9 +6222,10 @@ function diagnosticSendTestRow() {
   var rowNo = getCellStr(row, colMap.NO) || noValue;
 
   var clientName = getCellStr(row, colMap.CLIENT_NAME);
-  var clientEmail = getCellStr(row, colMap.CLIENT_EMAIL);
+  var clientEmailRaw = getCellStr(row, colMap.CLIENT_EMAIL);
+  var clientEmailList = parseClientEmails(clientEmailRaw);
   var staffEmail = getCellStr(row, colMap.STAFF_EMAIL);
-  var ccEmails = resolveCcEmails(clientEmail, staffEmail);
+  var ccEmails = resolveCcEmails(clientEmailList, staffEmail);
   var docType = getCellStr(row, colMap.DOC_TYPE);
   var expiryRaw = colMap.EXPIRY_DATE ? row[colMap.EXPIRY_DATE - 1] : "";
   var noticeStr = getCellStr(row, colMap.NOTICE_DATE);
@@ -5717,7 +6238,7 @@ function diagnosticSendTestRow() {
 
   var missing = [];
   if (!clientName) missing.push("Client Name");
-  if (!clientEmail) missing.push("Client Email");
+  if (clientEmailList.length === 0) missing.push("Client Email");
   if (!expiryRaw) missing.push("Expiry Date");
   if (missing.length > 0) {
     ui.alert("Cannot send — missing required field(s): " + missing.join(", "));
@@ -5743,7 +6264,7 @@ function diagnosticSendTestRow() {
       (noticeStr || "(empty)") +
       "\n" +
       "To:      " +
-      clientEmail +
+      clientEmailList.join(", ") +
       "\n" +
       "CC:      " +
       formatCcDisplay(ccEmails) +
@@ -5790,14 +6311,24 @@ function diagnosticSendTestRow() {
   );
 
   try {
-    var sentMeta = sendReminderEmail(
-      clientEmail,
-      ccEmails,
-      subject,
-      emailContent.htmlBody,
-      attachResult.blobs,
-    );
     var senderEmail = getSenderAccountEmail();
+    var displayName = getSenderDisplayName(senderEmail);
+    var testFallbackHtml = buildFallbackLinksHtml(attachResult.failedLinks);
+    var testHtmlBody = testFallbackHtml
+      ? emailContent.htmlBody + testFallbackHtml
+      : emailContent.htmlBody;
+    var sentMeta = { threadId: "", messageId: "" };
+    for (var ti = 0; ti < clientEmailList.length; ti++) {
+      var tMeta = sendReminderEmail(
+        clientEmailList[ti],
+        ccEmails,
+        subject,
+        testHtmlBody,
+        attachResult.blobs,
+        displayName,
+      );
+      if (ti === 0) sentMeta = tMeta;
+    }
     setStaffEmail(sheet, rowNum, colMap.STAFF_EMAIL, senderEmail);
     colMap = ensureReplyStatusColumn(sheet, tabName, colMap);
     writePostSendMetadata(sheet, rowNum, colMap, {
@@ -5826,14 +6357,14 @@ function diagnosticSendTestRow() {
       "Test email sent by No. " +
         rowNo +
         " | To: " +
-        clientEmail +
+        clientEmailList.join(", ") +
         (ccEmails.length > 0 ? " | CC: " + ccEmails.join(", ") : "") +
         " | Body: " +
         emailContent.source,
     );
     ui.alert(
       "Test email sent successfully to " +
-        clientEmail +
+        clientEmailList.join(", ") +
         "." +
         "\n\nBody source: " +
         emailContent.source +
