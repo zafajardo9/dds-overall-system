@@ -1,4 +1,4 @@
-// System Version: March 4, 2026
+// System Version: March 6, 2026 8:30 pm
 
 var CONFIG = {
   SHEET_NAME: "VISA automation",
@@ -480,11 +480,14 @@ function wizardStep1Tab(ss, ui, context) {
     newSheet.getRange(1, 1, 1, requiredHeaders.length).setFontWeight("bold");
     newSheet.setFrozenRows(1);
 
-    // Register tab
-    var existing = getConfiguredSheetNames();
-    if (existing.indexOf(newName) < 0) {
-      existing.push(newName);
-      setConfiguredSheetNames(existing);
+    // Register tab by ID+name
+    var existingEntries = getConfiguredTabEntries();
+    var existingIds = existingEntries.map(function (e) {
+      return e.id;
+    });
+    if (existingIds.indexOf(newSheet.getSheetId()) < 0) {
+      existingEntries.push({ id: newSheet.getSheetId(), name: newName });
+      setConfiguredTabEntries(existingEntries);
     }
 
     // Set header row = 1, data start = 2
@@ -501,19 +504,29 @@ function wizardStep1Tab(ss, ui, context) {
     );
     return context;
   } else {
-    // ── Use existing tab ──
-    var sheets = ss.getSheets().filter(function (s) {
-      return s.getName() !== CONFIG.LOGS_SHEET_NAME;
+    // ── Use existing tab ── show ALL tabs
+    var sheets = ss.getSheets();
+
+    var currentEntries = getConfiguredTabEntries();
+    var currentIds = currentEntries.map(function (e) {
+      return e.id;
+    });
+    var currentNames = currentEntries.map(function (e) {
+      return e.name;
     });
 
-    var configuredNames = getConfiguredSheetNames();
     var options = [];
     for (var i = 0; i < sheets.length; i++) {
-      var marker =
-        configuredNames.indexOf(sheets[i].getName()) >= 0
-          ? " [already registered]"
-          : "";
-      options.push(i + 1 + ". " + sheets[i].getName() + marker);
+      var isActive =
+        currentIds.indexOf(sheets[i].getSheetId()) >= 0 ||
+        currentNames.indexOf(sheets[i].getName()) >= 0;
+      options.push(
+        i +
+          1 +
+          ". " +
+          sheets[i].getName() +
+          (isActive ? " [already registered]" : ""),
+      );
     }
 
     var pickResp = ui.prompt(
@@ -533,11 +546,13 @@ function wizardStep1Tab(ss, ui, context) {
 
     var selectedSheet = sheets[idx - 1];
     var selectedName = selectedSheet.getName();
+    var selectedId = selectedSheet.getSheetId();
 
-    // Register if not already
-    if (configuredNames.indexOf(selectedName) < 0) {
-      configuredNames.push(selectedName);
-      setConfiguredSheetNames(configuredNames);
+    // Register by ID+name if not already registered
+    var alreadyRegistered = currentIds.indexOf(selectedId) >= 0;
+    if (!alreadyRegistered) {
+      currentEntries.push({ id: selectedId, name: selectedName });
+      setConfiguredTabEntries(currentEntries);
     }
 
     context.tabName = selectedName;
@@ -905,10 +920,16 @@ function showAllTabsInfo() {
 function selectWorkingTab() {
   var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // resolveAutomationSheets auto-purges deleted tabs and returns only live ones
   var sheetConfigs = resolveAutomationSheets(ss);
 
   if (sheetConfigs.length === 0) {
-    ui.alert("No tabs configured. Use 'Configure Automation Tabs' first.");
+    ui.alert(
+      "No Active Tabs Found",
+      "No configured tabs exist (or all were deleted/renamed).\n\nUse 'Configure Automation Tabs' to register tabs.",
+      ui.ButtonSet.OK,
+    );
     return;
   }
 
@@ -920,24 +941,20 @@ function selectWorkingTab() {
   var options = [];
   for (var i = 0; i < sheetConfigs.length; i++) {
     var config = sheetConfigs[i];
-    var sheet = config.sheet;
-    var icon = sheet ? "✓" : "✗";
+    var sheet = config.sheet; // always non-null here (purged above)
+    var icon = "✓";
     var status = "";
 
-    if (sheet) {
-      var flexMap = buildFlexibleColumnMap(sheet, config.sheetName);
-      var hasMissing = flexMap.warnings.some(function (w) {
-        return w.indexOf("Missing required") >= 0;
-      });
-      if (hasMissing) {
-        icon = "⚠";
-        status = " (missing columns)";
-      }
-    } else {
-      status = " (NOT FOUND)";
+    var flexMap = buildFlexibleColumnMap(sheet, config.sheetName);
+    var hasMissing = flexMap.warnings.some(function (w) {
+      return w.indexOf("Missing required") >= 0;
+    });
+    if (hasMissing) {
+      icon = "⚠";
+      status = " (missing columns)";
     }
 
-    var marker = config.sheetName === lastSelected ? " [CURRENT]" : "";
+    var marker = config.sheetName === lastSelected ? " ★ [current]" : "";
     options.push(
       i + 1 + ". " + icon + " " + config.sheetName + status + marker,
     );
@@ -945,7 +962,7 @@ function selectWorkingTab() {
 
   var response = ui.prompt(
     "Select Working Tab",
-    "Tabs with ✓ are ready, ⚠ need column setup, ✗ are missing:\n\n" +
+    "✓ = ready, ⚠ = needs column setup   ★ = currently selected\n\n" +
       options.join("\n") +
       "\n\nEnter number:",
     ui.ButtonSet.OK_CANCEL,
@@ -966,9 +983,11 @@ function selectWorkingTab() {
   );
 
   ui.alert(
-    "Working tab set to: " +
+    "Working Tab Set",
+    '"' +
       selected.sheetName +
-      "\n\nThis tab will be used for subsequent operations.",
+      '" is now your working tab.\n\nThis tab will be used for subsequent operations.',
+    ui.ButtonSet.OK,
   );
 }
 
@@ -1931,34 +1950,39 @@ function initializeAutomationSheet() {
 function configureAutomationSheets() {
   var ui = SpreadsheetApp.getUi();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheets = ss.getSheets().filter(function (sheet) {
-    return sheet.getName() !== CONFIG.LOGS_SHEET_NAME;
-  });
+
+  // Show ALL tabs — user decides what to include
+  var sheets = ss.getSheets();
 
   if (sheets.length === 0) {
-    ui.alert(
-      "Configure Sheets",
-      "No selectable sheet tabs were found.",
-      ui.ButtonSet.OK,
-    );
+    ui.alert("Configure Sheets", "No sheet tabs were found.", ui.ButtonSet.OK);
     return;
   }
 
-  var currentNames = getConfiguredSheetNames();
-  var currentLabel =
-    currentNames.length > 0 ? currentNames.join(", ") : "(none)";
+  // Resolve configured tabs — this auto-purges any deleted tabs from storage
+  var liveConfigs = resolveAutomationSheets(ss);
+  var liveIds = liveConfigs.map(function (c) {
+    return c.sheet ? c.sheet.getSheetId() : null;
+  });
+  var liveNames = liveConfigs.map(function (c) {
+    return c.sheetName;
+  });
 
   var options = [];
   for (var i = 0; i < sheets.length; i++) {
-    var marker =
-      currentNames.indexOf(sheets[i].getName()) >= 0 ? " [active]" : "";
-    options.push(i + 1 + ". " + sheets[i].getName() + marker);
+    var sh = sheets[i];
+    var isActive =
+      liveIds.indexOf(sh.getSheetId()) >= 0 ||
+      liveNames.indexOf(sh.getName()) >= 0;
+    options.push(i + 1 + ". " + sh.getName() + (isActive ? " ★ [active]" : ""));
   }
+
+  var currentLabel = liveNames.length > 0 ? liveNames.join(", ") : "(none)";
 
   var response = ui.prompt(
     "Configure Automation Sheet(s)",
-    "Enter sheet numbers or tab names, separated by commas.\n" +
-      "Example: 1, 3   or   VISA automation, Work Permit\n\n" +
+    "Enter tab numbers separated by commas. You can select multiple.\n" +
+      "Example: 1, 3\n\n" +
       "Currently active: " +
       currentLabel +
       "\n\n" +
@@ -1974,7 +1998,7 @@ function configureAutomationSheets() {
   }
 
   var parts = input.split(",");
-  var selected = [];
+  var selectedEntries = [];
   var errors = [];
 
   for (var p = 0; p < parts.length; p++) {
@@ -1982,89 +2006,128 @@ function configureAutomationSheets() {
     if (!part) continue;
 
     var idx = parseInt(part, 10);
-    var resolvedName = "";
+    var resolvedSheet = null;
 
-    if (
-      !isNaN(idx) &&
-      String(idx) === part &&
-      idx >= 1 &&
-      idx <= sheets.length
-    ) {
-      resolvedName = sheets[idx - 1].getName();
+    if (!isNaN(idx) && idx >= 1 && idx <= sheets.length) {
+      // Number input — index into the shown list
+      resolvedSheet = sheets[idx - 1];
     } else {
-      // Try exact tab name match (case-insensitive)
-      var found = null;
+      // Name input — case-insensitive match
       for (var s = 0; s < sheets.length; s++) {
         if (sheets[s].getName().toLowerCase() === part.toLowerCase()) {
-          found = sheets[s].getName();
+          resolvedSheet = sheets[s];
           break;
         }
       }
-      if (found) {
-        resolvedName = found;
-      } else {
-        errors.push('"' + part + '"');
+      if (!resolvedSheet) errors.push('"' + part + '"');
+    }
+    // Validate the resolved sheet actually exists
+    if (resolvedSheet && !ss.getSheetByName(resolvedSheet.getName())) {
+      errors.push('"' + resolvedSheet.getName() + '" (deleted)');
+      resolvedSheet = null;
+    }
+
+    if (resolvedSheet) {
+      var alreadyAdded = false;
+      for (var x = 0; x < selectedEntries.length; x++) {
+        if (selectedEntries[x].id === resolvedSheet.getSheetId()) {
+          alreadyAdded = true;
+          break;
+        }
+      }
+      if (!alreadyAdded) {
+        selectedEntries.push({
+          id: resolvedSheet.getSheetId(),
+          name: resolvedSheet.getName(),
+        });
       }
     }
-
-    if (resolvedName && selected.indexOf(resolvedName) < 0) {
-      selected.push(resolvedName);
-    }
   }
 
-  if (errors.length > 0) {
-    ui.alert(
-      "Some entries not found",
-      "Could not find tab(s): " + errors.join(", ") + "\n\nPlease try again.",
-      ui.ButtonSet.OK,
-    );
+  if (selectedEntries.length === 0) {
+    var errMsg =
+      errors.length > 0
+        ? "Could not find tab(s): " +
+          errors.join(", ") +
+          "\n\nPlease check the numbers and try again."
+        : "No valid tabs selected. Configuration unchanged.";
+    ui.alert("Nothing Saved", errMsg, ui.ButtonSet.OK);
     return;
   }
 
-  if (selected.length === 0) {
-    ui.alert("No valid tabs selected. Configuration unchanged.");
-    return;
-  }
+  setConfiguredTabEntries(selectedEntries);
 
-  setConfiguredSheetNames(selected);
+  var summary = selectedEntries
+    .map(function (e, i) {
+      return i + 1 + ". " + e.name + " (ID: " + e.id + ")";
+    })
+    .join("\n");
+
+  var warningLine =
+    errors.length > 0 ? "\n\n⚠ Not found (skipped): " + errors.join(", ") : "";
+
   ui.alert(
     "Configuration Saved",
     "Automation will now process " +
-      selected.length +
+      selectedEntries.length +
       " tab(s):\n\n" +
-      selected
-        .map(function (n, i) {
-          return i + 1 + ". " + n;
-        })
-        .join("\n"),
+      summary +
+      warningLine,
     ui.ButtonSet.OK,
   );
 }
 
 /**
- * Returns the configured automation sheet names as an array.
- * Backward-compatible: if stored value is a plain string (old format), wraps it in an array.
- * Falls back to CONFIG.SHEET_NAME if nothing is stored.
+ * Returns the configured automation tabs as an array of {id, name} objects.
+ * Handles three legacy formats:
+ *   - new format: JSON array of {id, name} objects
+ *   - old format: JSON array of plain strings
+ *   - legacy: plain comma-separated string
  */
-function getConfiguredSheetNames() {
+function getConfiguredTabEntries() {
   var props = PropertiesService.getDocumentProperties();
   var saved = props.getProperty(CONFIG.AUTOMATION_SHEET_PROPERTY_KEY);
-  if (!saved || saved.trim() === "") return [CONFIG.SHEET_NAME];
+  if (!saved || saved.trim() === "") {
+    return [{ id: null, name: CONFIG.SHEET_NAME }];
+  }
 
   var trimmed = saved.trim();
-  // Try JSON array first
   if (trimmed.charAt(0) === "[") {
     try {
       var parsed = JSON.parse(trimmed);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.filter(function (n) {
-          return !!String(n || "").trim();
-        });
+        return parsed
+          .filter(function (entry) {
+            return (
+              entry && (entry.name || entry.id || typeof entry === "string")
+            );
+          })
+          .map(function (entry) {
+            // Legacy: plain string inside the array
+            if (typeof entry === "string")
+              return { id: null, name: entry.trim() };
+            return {
+              id: entry.id || null,
+              name: String(entry.name || "").trim(),
+            };
+          })
+          .filter(function (e) {
+            return e.name || e.id;
+          });
       }
     } catch (e) {}
   }
-  // Legacy: plain string — treat as single tab
-  return [trimmed];
+  // Legacy plain string
+  return [{ id: null, name: trimmed }];
+}
+
+/**
+ * Returns configured automation sheet names as plain array (backward compat).
+ */
+function getConfiguredSheetNames() {
+  return getConfiguredTabEntries().map(function (e) {
+    return e.name;
+  });
 }
 
 /**
@@ -2075,17 +2138,37 @@ function getConfiguredSheetName() {
 }
 
 /**
- * Persists the list of configured sheet names as a JSON array in document properties.
+ * Persists a list of {id, name} tab entries to document properties.
  */
-function setConfiguredSheetNames(namesArray) {
-  var clean = (namesArray || []).filter(function (n) {
-    return !!String(n || "").trim();
+function setConfiguredTabEntries(entries) {
+  var clean = (entries || []).filter(function (e) {
+    return e && (e.name || e.id);
   });
   if (clean.length === 0) return;
   PropertiesService.getDocumentProperties().setProperty(
     CONFIG.AUTOMATION_SHEET_PROPERTY_KEY,
     JSON.stringify(clean),
   );
+}
+
+/**
+ * Persists the list of configured sheet names (backward compat — wraps into {id,name} entries).
+ * Tries to resolve sheet IDs from the active spreadsheet when possible.
+ */
+function setConfiguredSheetNames(namesArray) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var entries = (namesArray || [])
+    .filter(function (n) {
+      return !!String(n || "").trim();
+    })
+    .map(function (name) {
+      var sheet = ss.getSheetByName(name);
+      return {
+        id: sheet ? sheet.getSheetId() : null,
+        name: String(name).trim(),
+      };
+    });
+  setConfiguredTabEntries(entries);
 }
 
 /**
@@ -2099,12 +2182,82 @@ function setConfiguredSheetName(sheetName) {
 
 /**
  * Resolves all configured automation sheets.
- * Returns array of { sheetName, sheet } objects (sheet may be null if tab not found).
+ * Tries to find each tab by sheet ID first (rename-safe).
+ * If found by ID but name changed, updates the stored name automatically.
+ * Returns array of { sheetName, sheet } objects (sheet may be null if not found).
  */
 function resolveAutomationSheets(ss) {
-  var names = getConfiguredSheetNames();
-  return names.map(function (name) {
-    return { sheetName: name, sheet: ss.getSheetByName(name) };
+  var entries = getConfiguredTabEntries();
+  var needsUpdate = false;
+  var results = [];
+
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i];
+    var foundSheet = null;
+
+    // Try by numeric sheet ID first
+    if (entry.id !== null && entry.id !== undefined) {
+      var allSheets = ss.getSheets();
+      for (var j = 0; j < allSheets.length; j++) {
+        if (allSheets[j].getSheetId() === entry.id) {
+          foundSheet = allSheets[j];
+          break;
+        }
+      }
+      // If found by ID but name has changed, update stored name
+      if (foundSheet && foundSheet.getName() !== entry.name) {
+        entry.name = foundSheet.getName();
+        entries[i] = entry;
+        needsUpdate = true;
+      }
+    }
+
+    // Fallback: find by name when ID lookup failed
+    if (!foundSheet && entry.name) {
+      foundSheet = ss.getSheetByName(entry.name);
+      if (foundSheet) {
+        // Tab exists by name — update stored ID (handles deleted+recreated same-name tabs)
+        entry.id = foundSheet.getSheetId();
+        entries[i] = entry;
+        needsUpdate = true;
+      }
+    }
+
+    results.push({
+      sheetName: entry.name,
+      sheet: foundSheet,
+      resolvedId: foundSheet ? foundSheet.getSheetId() : null,
+    });
+  }
+
+  // Auto-purge entries for tabs that no longer exist
+  // Also deduplicate: if two entries resolved to the same sheet ID, keep only the first one
+  var surviving = [];
+  var seenIds = [];
+  for (var k = 0; k < results.length; k++) {
+    if (!results[k].sheet) {
+      // Tab not found — drop it
+      needsUpdate = true;
+      continue;
+    }
+    var resolvedId = results[k].resolvedId;
+    if (seenIds.indexOf(resolvedId) >= 0) {
+      // Duplicate — same physical sheet registered twice, drop the extra entry
+      needsUpdate = true;
+      continue;
+    }
+    seenIds.push(resolvedId);
+    surviving.push(entries[k]);
+  }
+
+  // Persist updated names/IDs silently (including purge + dedup)
+  if (needsUpdate) {
+    setConfiguredTabEntries(surviving);
+  }
+
+  // Return only found, deduplicated sheets
+  return results.filter(function (r) {
+    return !!r.sheet && seenIds.indexOf(r.resolvedId) >= 0;
   });
 }
 
@@ -2122,19 +2275,36 @@ function resolveAutomationSheet(ss) {
  */
 function promptSelectConfiguredSheet(ss, title) {
   var ui = SpreadsheetApp.getUi();
+
+  // resolveAutomationSheets auto-purges deleted tabs; only live tabs returned
   var configs = resolveAutomationSheets(ss);
+
+  if (configs.length === 0) {
+    ui.alert(
+      "No Tabs Found",
+      "No configured tabs exist. Use 'Configure Automation Tabs' to register tabs.",
+      ui.ButtonSet.OK,
+    );
+    return null;
+  }
 
   if (configs.length === 1) {
     return configs[0];
   }
 
+  var lastSelected = getPropString(
+    getTabConfigKey("_GLOBAL", TAB_CONFIG_KEYS.LAST_SELECTED),
+    "",
+  );
+
   var options = configs.map(function (c, i) {
-    return i + 1 + ". " + c.sheetName + (c.sheet ? "" : " (NOT FOUND)");
+    var marker = c.sheetName === lastSelected ? " ★ [current]" : "";
+    return i + 1 + ". " + c.sheetName + marker;
   });
 
   var response = ui.prompt(
     title || "Select Sheet Tab",
-    "Multiple tabs are configured. Select one by number:\n\n" +
+    "Select a tab by number:  ★ = currently selected working tab\n\n" +
       options.join("\n"),
     ui.ButtonSet.OK_CANCEL,
   );
@@ -4465,24 +4635,17 @@ function buildEmailContent(
   }
 
   var htmlBody = String(bodyText || "").replace(/\n/g, "<br>");
-  var redirectLinkUrl = getStaticRedirectLinkUrl();
-  if (redirectLinkUrl) {
-    htmlBody +=
-      '<br><br><a href="' +
-      sanitizeHtmlAttribute(redirectLinkUrl) +
-      '" target="_blank" rel="noopener noreferrer">Click here to open the link</a>';
-  }
   htmlBody = injectOpenTrackingPixel(htmlBody, openToken);
 
   // Build reply acknowledgement phrase block
   var replyKeywords = getReplyKeywords();
   var replyPhrase = replyKeywords.length > 0 ? replyKeywords[0] : "RECEIVED";
   var replyPhraseHtml =
-    '<div style="margin-top:20px;padding:12px 16px;background:#f0f7ff;border-left:4px solid #1a73e8;font-size:14px;color:#333;">' +
-    'Kindly reply <strong><u>"' +
+    '<p style="margin-top:20px;font-size:11px;color:#999;">' +
+    "Kindly reply <strong><u>&#8220;" +
     sanitizeHtmlContent(replyPhrase) +
-    '"</u></strong> to confirm that you have received and read this reminder.' +
-    "</div>";
+    "&#8221;</u></strong> to confirm that you have received and read this reminder." +
+    "</p>";
 
   htmlBody = [
     '<div style="font-family:Arial,sans-serif;font-size:14px;color:#333;max-width:600px;line-height:1.6;">',
