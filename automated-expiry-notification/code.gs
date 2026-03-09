@@ -1,4 +1,4 @@
-// System Version: March 6, 2026 8:30 pm
+// System Version: March 9, 2026 8:08 am
 
 var CONFIG = {
   SHEET_NAME: "VISA automation",
@@ -8,7 +8,7 @@ var CONFIG = {
   DATA_START_ROW: 3,
   TRIGGER_HOUR: 8,
   REPLY_SCAN_TRIGGER_HOUR: 9,
-  SENDER_NAME: "DDS Office",
+  SENDER_NAME: "Office",
   STATIC_REDIRECT_URL: "https://pastebin.com/8n85J6k6",
 };
 

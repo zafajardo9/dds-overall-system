@@ -107,7 +107,7 @@ The wizard auto-registers the tab in Script Properties and sets `headerRow = 1`,
 
   The phrase uses the first configured reply keyword (bold + underlined, blue callout box). This prompts the client to reply, which the reply scan detects automatically.
 
-- **Sender name** — uses the running account's display name; falls back to `DDS Office`
+- **Sender name** — derives from the running account's email domain (for example, `@duranschulze.com` → `Duranschulze`, `@filepino.com` → `Filepino`); falls back to `Office`
 - **Recipients:** primary from `Client Email`; optional CC from `Staff Email` column and/or default CC list
 - **Drive attachments** from `Attached Files` column (Google Drive URLs or file IDs)
 - **Attachment fallback** — if a file cannot be fetched, a clickable Drive link is appended to the email body instead of failing silently
