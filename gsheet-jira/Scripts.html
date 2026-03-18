@@ -1,0 +1,329 @@
+<script>
+  const state = {
+    board: null,
+    selectedTask: null,
+    draggingTaskId: null,
+    statusOptions: []
+  };
+
+  document.addEventListener('DOMContentLoaded', function() {
+    bindEvents();
+    loadBoard();
+  });
+
+  function bindEvents() {
+    document.getElementById('refresh-button').addEventListener('click', function() {
+      loadBoard();
+    });
+
+    document.getElementById('close-modal-button').addEventListener('click', closeModal);
+    document.getElementById('cancel-modal-button').addEventListener('click', closeModal);
+
+    document.getElementById('modal-backdrop').addEventListener('click', function(event) {
+      if (event.target.id === 'modal-backdrop') {
+        closeModal();
+      }
+    });
+
+    document.getElementById('task-form').addEventListener('submit', function(event) {
+      event.preventDefault();
+      saveTaskDetails();
+    });
+  }
+
+  function loadBoard() {
+    setStatus('Loading tasks from Google Sheets...', 'success');
+    google.script.run
+      .withSuccessHandler(function(result) {
+        state.board = result;
+        state.statusOptions = result.statusOptions || [];
+        document.getElementById('sheet-link').href = result.spreadsheetUrl;
+        renderBoard(result);
+        setStatus('Board synced successfully.', 'success', true);
+      })
+      .withFailureHandler(function(error) {
+        setStatus(error.message || 'Unable to load the board.', 'error');
+      })
+      .getBoardData();
+  }
+
+  function renderBoard(board) {
+    const boardEl = document.getElementById('board');
+    boardEl.innerHTML = '';
+
+    board.lanes.forEach(function(lane) {
+      const laneEl = document.createElement('section');
+      laneEl.className = 'lane';
+
+      const headerEl = document.createElement('div');
+      headerEl.className = 'lane-header';
+      headerEl.innerHTML = `
+        <div class="lane-title-row">
+          <h2>${escapeHtml(lane.title)}</h2>
+          <span class="task-chip">${lane.tasks.length}</span>
+        </div>
+        <div class="lane-meta">${escapeHtml(lane.tasks.length ? 'Active items in this list' : 'Waiting for tasks')}</div>
+      `;
+
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'lane-body';
+      bodyEl.dataset.sheetName = lane.sheetName;
+      bodyEl.addEventListener('dragover', handleDragOver);
+      bodyEl.addEventListener('dragleave', handleDragLeave);
+      bodyEl.addEventListener('drop', handleDrop);
+
+      if (!lane.tasks.length) {
+        const emptyEl = document.createElement('div');
+        emptyEl.className = 'empty-state';
+        emptyEl.textContent = 'No tasks in this lane yet.';
+        bodyEl.appendChild(emptyEl);
+      } else {
+        lane.tasks.forEach(function(task) {
+          bodyEl.appendChild(createTaskCard(task));
+        });
+      }
+
+      laneEl.appendChild(headerEl);
+      laneEl.appendChild(bodyEl);
+      boardEl.appendChild(laneEl);
+    });
+  }
+
+  function createTaskCard(task) {
+    const cardEl = document.createElement('article');
+    cardEl.className = 'task-card';
+    cardEl.draggable = true;
+    cardEl.dataset.taskId = task.taskId;
+    cardEl.dataset.sheetName = task.sheetName;
+    cardEl.addEventListener('dragstart', handleDragStart);
+    cardEl.addEventListener('dragend', handleDragEnd);
+
+    const linkMarkup = task.links
+      ? `<a class="task-link" href="${escapeAttribute(task.links)}" target="_blank" rel="noopener noreferrer">${escapeHtml(task.links)}</a>`
+      : '<span class="task-value">No link</span>';
+
+    cardEl.innerHTML = `
+      <div class="task-card-header">
+        <div>
+          <span class="task-label">Company</span>
+          <h3>${escapeHtml(task.company || 'Untitled Task')}</h3>
+        </div>
+        <span class="task-chip">${escapeHtml(task.status || 'PENDING')}</span>
+      </div>
+      ${renderField('Description', task.description)}
+      ${renderField('Remarks', task.remarks)}
+      ${renderField('Notes', task.notes)}
+      <div class="task-field">
+        <span class="task-label">Links</span>
+        <div class="task-value">${linkMarkup}</div>
+      </div>
+      ${renderField('Progress', task.progress)}
+      <div class="task-actions">
+        <button class="task-open" type="button">Open project</button>
+      </div>
+    `;
+
+    const openButton = cardEl.querySelector('.task-open');
+    openButton.addEventListener('click', function(event) {
+      event.stopPropagation();
+      openTaskModal(task.taskId);
+    });
+
+    cardEl.addEventListener('click', function(event) {
+      if (event.target.closest('a')) {
+        return;
+      }
+      openTaskModal(task.taskId);
+    });
+
+    return cardEl;
+  }
+
+  function renderField(label, value) {
+    return `
+      <div class="task-field">
+        <span class="task-label">${escapeHtml(label)}</span>
+        <p class="task-value">${escapeHtml(value || '') || '<span style="color:#8f7e6a;">None</span>'}</p>
+      </div>
+    `;
+  }
+
+  function handleDragStart(event) {
+    const card = event.currentTarget;
+    state.draggingTaskId = card.dataset.taskId;
+    card.classList.add('dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', JSON.stringify({
+      taskId: card.dataset.taskId,
+      fromSheet: card.dataset.sheetName
+    }));
+  }
+
+  function handleDragEnd(event) {
+    event.currentTarget.classList.remove('dragging');
+    state.draggingTaskId = null;
+    document.querySelectorAll('.lane-body').forEach(function(lane) {
+      lane.classList.remove('drag-over');
+    });
+  }
+
+  function handleDragOver(event) {
+    event.preventDefault();
+    event.currentTarget.classList.add('drag-over');
+  }
+
+  function handleDragLeave(event) {
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      event.currentTarget.classList.remove('drag-over');
+    }
+  }
+
+  function handleDrop(event) {
+    event.preventDefault();
+    const destinationLane = event.currentTarget;
+    destinationLane.classList.remove('drag-over');
+
+    let payload = null;
+    try {
+      payload = JSON.parse(event.dataTransfer.getData('text/plain'));
+    } catch (error) {
+      setStatus('Could not read the dragged task.', 'error');
+      return;
+    }
+
+    const toSheet = destinationLane.dataset.sheetName;
+    if (!payload || !payload.taskId || !payload.fromSheet) {
+      setStatus('Dragged task is missing required data.', 'error');
+      return;
+    }
+
+    if (payload.fromSheet === toSheet) {
+      return;
+    }
+
+    setStatus('Moving task...', 'success');
+    google.script.run
+      .withSuccessHandler(function() {
+        loadBoard();
+      })
+      .withFailureHandler(function(error) {
+        setStatus(error.message || 'Could not move the task.', 'error');
+      })
+      .moveTask(payload.taskId, payload.fromSheet, toSheet);
+  }
+
+  function openTaskModal(taskId) {
+    const task = findTaskById(taskId);
+    if (!task) {
+      setStatus('Task could not be found in the current board state.', 'error');
+      return;
+    }
+
+    state.selectedTask = task;
+    renderStatusOptions(task.status || '');
+    document.getElementById('task-id').value = task.taskId;
+    document.getElementById('task-sheet-name').value = task.sheetName;
+    document.getElementById('task-company').value = task.company || '';
+    document.getElementById('task-description').value = task.description || '';
+    document.getElementById('task-remarks').value = task.remarks || '';
+    document.getElementById('task-notes').value = task.notes || '';
+    document.getElementById('task-links').value = task.links || '';
+    document.getElementById('task-progress').value = task.progress || '';
+    document.getElementById('task-status').value = task.status || '';
+    document.getElementById('modal-title').textContent = task.company || 'Edit Project';
+    document.getElementById('modal-backdrop').classList.remove('hidden');
+  }
+
+  function closeModal() {
+    state.selectedTask = null;
+    document.getElementById('modal-backdrop').classList.add('hidden');
+    document.getElementById('task-form').reset();
+  }
+
+  function saveTaskDetails() {
+    const taskId = document.getElementById('task-id').value;
+    const sheetName = document.getElementById('task-sheet-name').value;
+    const updates = {
+      description: document.getElementById('task-description').value.trim(),
+      remarks: document.getElementById('task-remarks').value.trim(),
+      notes: document.getElementById('task-notes').value.trim(),
+      links: document.getElementById('task-links').value.trim(),
+      progress: document.getElementById('task-progress').value.trim(),
+      status: document.getElementById('task-status').value
+    };
+
+    setStatus('Saving task changes...', 'success');
+    google.script.run
+      .withSuccessHandler(function() {
+        closeModal();
+        loadBoard();
+      })
+      .withFailureHandler(function(error) {
+        setStatus(error.message || 'Could not save the task.', 'error');
+      })
+      .updateTask(taskId, sheetName, updates);
+  }
+
+  function renderStatusOptions(selectedStatus) {
+    const selectEl = document.getElementById('task-status');
+    const options = state.statusOptions.length ? state.statusOptions.slice() : [];
+
+    if (selectedStatus && !options.some(function(option) { return option === selectedStatus; })) {
+      options.unshift(selectedStatus);
+    }
+
+    selectEl.innerHTML = '';
+    options.forEach(function(option) {
+      const optionEl = document.createElement('option');
+      optionEl.value = option;
+      optionEl.textContent = option;
+      selectEl.appendChild(optionEl);
+    });
+
+    selectEl.value = selectedStatus || (options[0] || '');
+  }
+
+  function findTaskById(taskId) {
+    if (!state.board || !state.board.lanes) {
+      return null;
+    }
+
+    for (const lane of state.board.lanes) {
+      const match = lane.tasks.find(function(task) {
+        return task.taskId === taskId;
+      });
+      if (match) {
+        return match;
+      }
+    }
+
+    return null;
+  }
+
+  function setStatus(message, variant, autoHide) {
+    const banner = document.getElementById('status-banner');
+    banner.textContent = message;
+    banner.classList.remove('hidden', 'error', 'success');
+    banner.classList.add(variant === 'error' ? 'error' : 'success');
+
+    if (autoHide) {
+      window.clearTimeout(setStatus._timeoutId);
+      setStatus._timeoutId = window.setTimeout(function() {
+        banner.classList.add('hidden');
+      }, 2200);
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function escapeAttribute(value) {
+    return escapeHtml(value).replace(/`/g, '&#96;');
+  }
+</script>

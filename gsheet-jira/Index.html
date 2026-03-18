@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Project List</title>
+    <?!= include('Styles'); ?>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Google Sheets Project List</p>
+          <h1>Project List workflow for your spreadsheet</h1>
+          <p class="lede">Drag tasks across tabs, update status from the real sheet options, and edit details without leaving the board.</p>
+        </div>
+        <div class="topbar-actions">
+          <a id="sheet-link" class="ghost-button" href="#" target="_blank" rel="noopener noreferrer">Open Sheet</a>
+          <button id="refresh-button" class="ghost-button" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="status-banner" class="status-banner hidden" aria-live="polite"></section>
+        <section id="board" class="board" aria-label="Project list board"></section>
+      </main>
+    </div>
+
+    <div id="modal-backdrop" class="modal-backdrop hidden">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Project Details</p>
+            <h2 id="modal-title">Edit Project</h2>
+          </div>
+          <button id="close-modal-button" class="icon-button" type="button" aria-label="Close">×</button>
+        </div>
+
+        <form id="task-form" class="task-form">
+          <input id="task-id" name="taskId" type="hidden">
+          <input id="task-sheet-name" name="sheetName" type="hidden">
+
+          <label>
+            <span>Company</span>
+            <input id="task-company" type="text" readonly>
+          </label>
+
+          <label>
+            <span>Description</span>
+            <textarea id="task-description" name="description" rows="4"></textarea>
+          </label>
+
+          <label>
+            <span>Remarks</span>
+            <textarea id="task-remarks" name="remarks" rows="3"></textarea>
+          </label>
+
+          <label>
+            <span>Notes</span>
+            <textarea id="task-notes" name="notes" rows="4"></textarea>
+          </label>
+
+          <label>
+            <span>Links</span>
+            <input id="task-links" name="links" type="url" placeholder="https://example.com">
+          </label>
+
+          <label>
+            <span>Progress</span>
+            <input id="task-progress" name="progress" type="text" placeholder="In Review / 80% / Waiting for client">
+          </label>
+
+          <label>
+            <span>Status</span>
+            <select id="task-status" name="status"></select>
+          </label>
+
+          <div class="modal-actions">
+            <button id="cancel-modal-button" class="ghost-button" type="button">Cancel</button>
+            <button id="save-task-button" class="primary-button" type="submit">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <?!= include('Scripts'); ?>
+  </body>
+</html>
