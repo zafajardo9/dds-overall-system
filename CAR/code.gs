@@ -780,6 +780,12 @@ function getFormulaDrivenDeadlineGroups(sheet) {
       } else if (headerContainsPhrase(group.label, ["estate tax due date"])) {
         type = DEADLINE_GROUP_TYPES.ESTATE_TAX;
       }
+      if (
+        type === DEADLINE_GROUP_TYPES.ESTATE_TAX &&
+        (!group.remainingCol || !group.statusCol || !group.reminderCol)
+      ) {
+        return null;
+      }
       return type ? Object.assign({ type: type }, group) : null;
     })
     .filter(Boolean);
@@ -853,6 +859,144 @@ function verifyFormulaDrivenGroup(sheet, group) {
     missingColumns: missing,
     missingFormulas: formulaMissing,
   };
+}
+
+function columnToLetter(column) {
+  let temp = "";
+  let letter = "";
+  while (column > 0) {
+    temp = (column - 1) % 26;
+    letter = String.fromCharCode(temp + 65) + letter;
+    column = (column - temp - 1) / 26;
+  }
+  return letter;
+}
+
+function findDateOfDeathColumn(headers) {
+  for (let i = 0; i < headers.length; i++) {
+    if (
+      headerContainsPhrase(headers[i], [
+        "decedents date of death",
+        "decedent date of death",
+        "date of death",
+      ])
+    ) {
+      return i + 1;
+    }
+  }
+  return null;
+}
+
+function buildArrayFormulaForGroup(groupType, refs) {
+  const companyRange = `${refs.companyCol}${refs.startRow}:${refs.companyCol}`;
+  const baseRange = `${refs.baseCol}${refs.startRow}:${refs.baseCol}`;
+  const dueRange = `${refs.dueCol}${refs.startRow}:${refs.dueCol}`;
+  const remainingRange = `${refs.remainingCol}${refs.startRow}:${refs.remainingCol}`;
+  const statusRange = `${refs.statusCol}${refs.startRow}:${refs.statusCol}`;
+  let dueFormula = "";
+  let reminderSuffix = "";
+
+  if (groupType === DEADLINE_GROUP_TYPES.DST) {
+    dueFormula = `=ARRAYFORMULA(IF(ISNUMBER(${baseRange}),EOMONTH(${baseRange},0)+5,""))`;
+    reminderSuffix = "DST Payment for CAR Transfer of Shares";
+  } else if (groupType === DEADLINE_GROUP_TYPES.CGT_DOD) {
+    dueFormula = `=ARRAYFORMULA(IF(ISNUMBER(${baseRange}),${baseRange}+30,""))`;
+    reminderSuffix = "CGT / DOD Payment for CAR Transfer of Shares";
+  } else if (groupType === DEADLINE_GROUP_TYPES.TRANSFER_TAX) {
+    dueFormula = `=ARRAYFORMULA(IF(ISNUMBER(${baseRange}),${baseRange}+60,""))`;
+    reminderSuffix = "Transfer Tax Payment";
+  } else if (groupType === DEADLINE_GROUP_TYPES.ESTATE_TAX) {
+    dueFormula = `=ARRAYFORMULA(IF(ISNUMBER(${baseRange}),EDATE(${baseRange},12),""))`;
+    reminderSuffix = "Estate Tax Payment";
+  } else {
+    return null;
+  }
+
+  const remainingFormula = `=ARRAYFORMULA(IF((${baseRange}="")+(${dueRange}=""),"",DATEVALUE(${dueRange})-TODAY()))`;
+  const statusFormula = `=ARRAYFORMULA(IF(${dueRange}="","",IF(((${remainingRange}=15)+(${remainingRange}=10)+(${remainingRange}=5)+(${remainingRange}=2)+(${remainingRange}=0))>0,"SEND","WAIT")))`;
+  const reminderFormula = `=ARRAYFORMULA(IF(${statusRange}="WAIT","",IF(${dueRange}="","",(IF(${remainingRange}=0,"🔴 DUE TODAY: ","⚠️ REMINDER ("&${remainingRange}&" days left): ")&${companyRange}&" - ${reminderSuffix}"))))`;
+
+  return {
+    dueFormula: dueFormula,
+    remainingFormula: remainingFormula,
+    statusFormula: statusFormula,
+    reminderFormula: reminderFormula,
+  };
+}
+
+function applyFormulasToConfiguredSheets() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cfg = getConfig();
+  const sheetNames = Array.from(
+    new Set(getConfiguredDstCgtTabs().concat(getConfiguredTransferTaxTabs())),
+  );
+
+  if (!sheetNames.length) {
+    ui.alert("Apply Formulas", "No configured tabs found. Run Quick Setup first.", ui.ButtonSet.OK);
+    return;
+  }
+
+  let applied = 0;
+  const skipped = [];
+
+  sheetNames.forEach((sheetName) => {
+    const sheet = ss.getSheetByName(sheetName);
+    if (!sheet) {
+      skipped.push(`${sheetName}: tab not found`);
+      return;
+    }
+
+    const headers = getHeaders(sheet);
+    const companyCol = getColumnIndex(sheet, cfg.HEADERS.CLIENT_NAME);
+    const notaryCol = getColumnIndex(sheet, cfg.HEADERS.NOTARY_DATE);
+    const dateOfDeathCol = findDateOfDeathColumn(headers);
+    const startRow = getDataStartRow(sheet);
+    const groups = getTrackedDeadlineGroups(sheet);
+
+    if (!companyCol) {
+      skipped.push(`${sheetName}: Company column not found`);
+      return;
+    }
+
+    groups.forEach((group) => {
+      if (!group.remainingCol || !group.statusCol || !group.reminderCol) {
+        skipped.push(`${sheetName}: ${group.type} group is incomplete`);
+        return;
+      }
+
+      let baseCol = notaryCol;
+      if (group.type === DEADLINE_GROUP_TYPES.ESTATE_TAX) {
+        baseCol = dateOfDeathCol || notaryCol;
+      }
+      if (!baseCol) {
+        skipped.push(`${sheetName}: ${group.type} base date column not found`);
+        return;
+      }
+
+      const formulas = buildArrayFormulaForGroup(group.type, {
+        startRow: startRow,
+        baseCol: columnToLetter(baseCol),
+        companyCol: columnToLetter(companyCol),
+        dueCol: columnToLetter(group.dueDateCol),
+        remainingCol: columnToLetter(group.remainingCol),
+        statusCol: columnToLetter(group.statusCol),
+      });
+      if (!formulas) return;
+
+      sheet.getRange(startRow, group.dueDateCol).setFormula(formulas.dueFormula);
+      sheet.getRange(startRow, group.remainingCol).setFormula(formulas.remainingFormula);
+      sheet.getRange(startRow, group.statusCol).setFormula(formulas.statusFormula);
+      sheet.getRange(startRow, group.reminderCol).setFormula(formulas.reminderFormula);
+      applied++;
+    });
+  });
+
+  const message = `Applied formulas to ${applied} deadline group(s)${
+    skipped.length ? `\n\nSkipped:\n- ${skipped.join("\n- ")}` : ""
+  }`;
+  logActivity("SYSTEM", "Apply Formulas", message.replace(/\n/g, " | "));
+  ui.alert("Apply Formulas", message, ui.ButtonSet.OK);
 }
 
 function parseDueDateRule(headerText) {
@@ -955,6 +1099,7 @@ function showSettings() {
   const automation = getAutomaticSendingStatus();
   const dstCgtTabs = getConfiguredDstCgtTabs();
   const transferTabs = getConfiguredTransferTaxTabs();
+  const cfg = getConfig();
 
   let msg = "CAR Monitoring — Formula Reminder Settings\n";
   msg += "=".repeat(44) + "\n\n";
@@ -965,6 +1110,9 @@ function showSettings() {
   msg += "  Recipient Column: Staff Email\n";
   msg += "  Send Condition: Status = SEND and Reminder is not blank\n";
   msg += "  Duplicate Rule: One email per row/group/day\n";
+  msg += "\nROW SAFEGUARDS\n";
+  msg += `  Header Row: ${cfg.HEADER_ROW || "(auto-detect)"}\n`;
+  msg += `  Data Start Row: ${cfg.DATA_START_ROW || "(auto-detect first formula/data row)"}\n`;
   msg += "\nAUTOMATIC SENDING\n";
   msg += `  Status: ${automation.enabled ? "ACTIVE" : "NOT ACTIVE"}\n`;
   msg += `  Daily Run Time: ${automation.timeLabel}\n`;
@@ -1124,8 +1272,9 @@ function setHeaderRow() {
   const ui = SpreadsheetApp.getUi();
   const current = getConfig().HEADER_ROW;
   const response = ui.prompt(
-    "2.2 Set Header Row",
+    "Set Header Row",
     `The header row is the row that contains your column names (Company, Seller/Donor, etc.).
+Merged title or label rows above it should not be selected.
 
 Current value: ${current || "auto-detect"}
 
@@ -1163,12 +1312,14 @@ function setDataStartRow() {
   const ui = SpreadsheetApp.getUi();
   const current = getConfig().DATA_START_ROW;
   const response = ui.prompt(
-    "2.3 Set Data Start Row",
-    `The data start row is where your first data record begins (below the header row).
+    "Set Data Start Row",
+    `The data start row is where your first actual data entry begins (below the header row).
+If some rows are merged and used only as labels or section titles, skip those and enter the first real input row.
+The first real input row often contains formula cells in the due-date group columns.
 
-Current value: ${current || "header row + 1"}
+Current value: ${current || "auto-detect first usable row"}
 
-Enter the row number (e.g. 4), or leave blank to use header row + 1:`,
+Enter the row number (e.g. 5), or leave blank to use auto-detection:`,
     ui.ButtonSet.OK_CANCEL,
   );
   if (response.getSelectedButton() !== ui.Button.OK) return;
@@ -1179,8 +1330,8 @@ Enter the row number (e.g. 4), or leave blank to use header row + 1:`,
   if (input === "") {
     scriptProps.deleteProperty("DATA_START_ROW");
     invalidateConfigCache();
-    ui.alert("Data start row reset to header row + 1.");
-    logActivity("SYSTEM", "Data Start Row", "Reset to header row + 1");
+    ui.alert("Data start row reset to auto-detection.");
+    logActivity("SYSTEM", "Data Start Row", "Reset to auto-detect");
     return;
   }
 
@@ -1263,6 +1414,8 @@ function quickSetup() {
   );
   if (transferTabs === null) return;
 
+  runRowSetup();
+
   setConfiguredDstCgtTabs(dstCgtTabs);
   setConfiguredTransferTaxTabs(transferTabs);
 
@@ -1271,6 +1424,8 @@ function quickSetup() {
   msg += "=".repeat(30) + "\n\n";
   msg += `DST / CGT Tabs: ${dstCgtTabs.length ? dstCgtTabs.join(", ") : "(none selected)"}\n`;
   msg += `Transfer Tax Tabs: ${transferTabs.length ? transferTabs.join(", ") : "(none selected)"}\n`;
+  msg += `Header Row: ${getConfig().HEADER_ROW || "auto-detect"}\n`;
+  msg += `Data Start Row: ${getConfig().DATA_START_ROW || "auto-detect"}\n`;
   msg += `Automatic Sending Time: ${getAutomaticSendingStatus().timeLabel}\n\n`;
   msg += `Validation Status: ${results.issues.length ? "ACTION REQUIRED" : results.warnings.length ? "READY WITH WARNINGS" : "READY"}\n`;
   if (results.issues.length) {
@@ -1288,6 +1443,40 @@ function quickSetup() {
   );
 }
 
+function showAbout() {
+  const ui = SpreadsheetApp.getUi();
+  const dstCgtTabs = getConfiguredDstCgtTabs();
+  const transferTabs = getConfiguredTransferTaxTabs();
+  let msg = "CAR Monitoring — About\n";
+  msg += "=".repeat(30) + "\n\n";
+  msg += "What this Apps Script does:\n";
+  msg += "- It does not compute deadlines itself.\n";
+  msg += "- It reads the formulas already present in your sheet.\n";
+  msg += '- It scans each due-date group and sends an email only when that group\'s Status is "SEND" and Reminder is not blank.\n';
+  msg += "- It sends reminders to the Staff Email column only.\n";
+  msg += "- It sends separate emails per deadline group.\n";
+  msg += "- It prevents duplicate same-day sends for the same row, tab, deadline group, and recipient.\n";
+  msg += "\nPer tab group:\n";
+  msg += `- DST / CGT Tabs: ${dstCgtTabs.length ? dstCgtTabs.join(", ") : "(none selected)"}\n`;
+  msg += "  Expected groups: DST Due Date and CGT / DOD Due Date\n";
+  msg += "  The script validates that these due-date groups, formula cells, Reminder, Status, and Staff Email exist.\n";
+  msg += `- Transfer Tax Tabs: ${transferTabs.length ? transferTabs.join(", ") : "(none selected)"}\n`;
+  msg += "  Expected group: Transfer Tax Due Date\n";
+  msg += "  Estate Tax is also included automatically on these tabs when detected.\n";
+  msg += "\nAutomatic Sending:\n";
+  msg += "- If enabled, the daily trigger runs the same reminder scan automatically.\n";
+  msg += "- If disabled, you can still use Send Reminder Emails manually.\n";
+  msg += "\nQuick Setup:\n";
+  msg += "- Lets you choose which tabs belong to DST/CGT and Transfer Tax groups.\n";
+  msg += "- Shows already-assigned tabs during selection.\n";
+  msg += "- Saves your selections and validates whether the selected tabs match the expected deadline groups.\n";
+  msg += "\nApply Formulas:\n";
+  msg += "- Writes the ARRAYFORMULA formulas into the configured Due Date, Remaining Days, Status, and Reminder columns.\n";
+  msg += "- Uses the detected column positions for each tab instead of fixed letters.\n";
+
+  ui.alert("About", msg, ui.ButtonSet.OK);
+}
+
 // ============================================================================
 // ON OPEN - CUSTOM MENU
 // ============================================================================
@@ -1296,8 +1485,10 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu("CAR Monitoring")
     .addItem("Quick Setup", "quickSetup")
+    .addItem("Apply Formulas to Configured Sheets", "applyFormulasToConfiguredSheets")
     .addItem("Run Validation", "showValidationReport")
     .addItem("Send Reminder Emails", "sendReminderEmails")
+    .addItem("About", "showAbout")
     .addSeparator()
     .addSubMenu(
       ui
@@ -1311,6 +1502,8 @@ function onOpen() {
       ui
         .createMenu("Settings")
         .addItem("View Current Settings", "showSettings")
+        .addItem("Set Header Row", "setHeaderRow")
+        .addItem("Set Data Start Row", "setDataStartRow")
         .addItem("Reset Formula Reminder Settings", "resetSettingsToDefaults")
         .addItem("View Activity Log", "viewActivityLog"),
     )
@@ -1332,19 +1525,42 @@ function detectHeaderRow(sheet) {
   const configured = getConfig().HEADER_ROW;
   if (configured && configured >= 1) return configured;
 
-  const maxScan = Math.min(5, sheet.getLastRow());
+  const maxScan = Math.min(10, sheet.getLastRow());
   if (maxScan < 1) return 1;
 
-  const scanData = sheet
-    .getRange(1, 1, maxScan, sheet.getLastColumn())
-    .getValues();
+  const scanData = sheet.getRange(1, 1, maxScan, sheet.getLastColumn()).getValues();
   let bestRow = 1;
-  let bestCount = 0;
+  let bestScore = -1;
 
   for (let i = 0; i < scanData.length; i++) {
-    const nonEmpty = scanData[i].filter((v) => v !== "" && v !== null).length;
-    if (nonEmpty > bestCount) {
-      bestCount = nonEmpty;
+    const rowNumber = i + 1;
+    const rowValues = scanData[i];
+    const nonEmpty = rowValues.filter((v) => v !== "" && v !== null).length;
+    const headerHits = rowValues.filter((value) =>
+      headerContainsPhrase(value, [
+        "company",
+        "seller donor",
+        "buyer donee",
+        "services",
+        "staff email",
+        "notary date",
+        "dst due date",
+        "cgt dod due date",
+        "cgt / dod due date",
+        "transfer tax due date",
+        "estate tax due date",
+        "remaining days",
+        "status",
+        "reminder",
+      ]),
+    ).length;
+    const isLikelyMergedLabel =
+      sheet.getRange(rowNumber, 1, 1, Math.max(1, sheet.getLastColumn())).isPartOfMerge() &&
+      nonEmpty <= 2;
+    const score = headerHits * 10 + nonEmpty - (isLikelyMergedLabel ? 100 : 0);
+
+    if (score > bestScore) {
+      bestScore = score;
       bestRow = i + 1;
     }
   }
@@ -1355,7 +1571,39 @@ function detectHeaderRow(sheet) {
 function getDataStartRow(sheet) {
   const configured = getConfig().DATA_START_ROW;
   if (configured && configured >= 1) return configured;
-  return getHeaderRow(sheet) + 1;
+  const headerRow = getHeaderRow(sheet);
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  if (lastRow <= headerRow || lastColumn === 0) return headerRow + 1;
+
+  const groups = getFormulaDrivenDeadlineGroups(sheet);
+  for (let row = headerRow + 1; row <= lastRow; row++) {
+    const rowRange = sheet.getRange(row, 1, 1, lastColumn);
+    const values = rowRange.getValues()[0];
+    const formulas = rowRange.getFormulas()[0];
+    const hasAnyData = values.some((value) => value !== "" && value !== null);
+    if (!hasAnyData) continue;
+
+    const hasTrackedFormula = groups.some((group) =>
+      [group.dueDateCol, group.remainingCol, group.statusCol, group.reminderCol]
+        .filter(Boolean)
+        .some((col) => !!formulas[col - 1]),
+    );
+    const isLikelyMergedLabel = rowRange.isPartOfMerge() && !hasTrackedFormula;
+    if (isLikelyMergedLabel) continue;
+    if (hasTrackedFormula) return row;
+
+    const staffEmailCol = findHeaderIndexByName(getHeaders(sheet), getConfig().HEADERS.STAFF_EMAIL);
+    const companyCol = findHeaderIndexByName(getHeaders(sheet), getConfig().HEADERS.CLIENT_NAME);
+    if (
+      (staffEmailCol && values[staffEmailCol - 1] !== "") ||
+      (companyCol && values[companyCol - 1] !== "")
+    ) {
+      return row;
+    }
+  }
+
+  return headerRow + 1;
 }
 
 function setupSheet(sheetName) {
@@ -1665,6 +1913,38 @@ function validateSystem() {
         ),
       );
       return;
+    }
+
+    const headerRow = getHeaderRow(sheet);
+    const dataStartRow = getDataStartRow(sheet);
+    if (dataStartRow <= headerRow) {
+      issues.push(
+        createValidationEntry(
+          `${sheetName}: Data start row (${dataStartRow}) must be below the header row (${headerRow}).`,
+          "Fix: Use Settings > Set Header Row or Set Data Start Row and choose the first real input row below the headers.",
+        ),
+      );
+    } else {
+      const rowRange = sheet.getRange(dataStartRow, 1, 1, Math.max(1, sheet.getLastColumn()));
+      const rowValues = rowRange.getValues()[0];
+      const rowFormulas = rowRange.getFormulas()[0];
+      const hasAnyFormula = rowFormulas.some(Boolean);
+      const hasAnyData = rowValues.some((value) => value !== "" && value !== null);
+      if (rowRange.isPartOfMerge() && !hasAnyFormula) {
+        warnings.push(
+          createValidationEntry(
+            `${sheetName}: The selected data start row (${dataStartRow}) looks like a merged label row, not a real input row.`,
+            "Fix: Set Data Start Row to the first non-label row where actual data begins and formula cells are present.",
+          ),
+        );
+      } else if (!hasAnyData) {
+        warnings.push(
+          createValidationEntry(
+            `${sheetName}: The selected data start row (${dataStartRow}) is empty.`,
+            "Fix: Set Data Start Row to the first actual row used for data entry and formulas.",
+          ),
+        );
+      }
     }
 
     if (!findHeaderIndexByName(headers, getConfig().HEADERS.NOTARY_DATE)) {
@@ -2310,6 +2590,15 @@ function logReminderSend(sheetName, rowNumber, deadlineGroup, recipient, trigger
   ]);
 }
 
+function markReminderCellAsSent(sheet, rowNumber, columnNumber) {
+  if (!sheet || !rowNumber || !columnNumber) return;
+  sheet
+    .getRange(rowNumber, columnNumber)
+    .setBackground("#93c47d")
+    .setFontColor("#ffffff")
+    .setFontWeight("bold");
+}
+
 function logActivity(clientName, action, detail) {
   try {
     const sheet = ensureActivityLogSheet();
@@ -2631,6 +2920,7 @@ function sendReminderEmailsByTriggerType(triggerType) {
             "Reminder Email Sent",
             `${group.type} to ${recipient} (${triggerType})`,
           );
+          markReminderCellAsSent(sheet, actualRow, group.reminderCol);
         } catch (e) {
           logReminderSend(
             sheetName,

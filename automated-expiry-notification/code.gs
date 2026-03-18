@@ -2664,7 +2664,15 @@ function getConfiguredFallbackTemplate() {
  * Returns open tracking base URL configured for doGet tracking.
  */
 function getOpenTrackingBaseUrl() {
-  return getPropString(PROP_KEYS.OPEN_TRACKING_BASE_URL, "");
+  var configured = getPropString(PROP_KEYS.OPEN_TRACKING_BASE_URL, "");
+  if (configured) return configured;
+
+  try {
+    var serviceUrl = ScriptApp.getService().getUrl();
+    if (serviceUrl) return serviceUrl;
+  } catch (e) {}
+
+  return "";
 }
 
 /**
@@ -3071,6 +3079,9 @@ function runDailyCheck() {
         );
       }
       var ccEmails = resolveCcEmails(clientEmailList, staffEmail);
+      if (trackingEnabled) {
+        colMap = ensureOpenTrackingColumns(visaSheet, tabName, colMap);
+      }
       var baseSubject = buildEmailSubject(docType, clientName, expiryDate);
       var clientEmailDisplay = clientEmailList.join(", ");
 
@@ -4215,6 +4226,20 @@ function ensureFinalNoticeColumns(sheet, tabName, colMap) {
   }
 
   return colMap;
+}
+
+function ensureOpenTrackingColumns(sheet, tabName, colMap) {
+  var keys = ["OPEN_TOKEN", "FIRST_OPENED_AT", "LAST_OPENED_AT", "OPEN_COUNT"];
+  var updatedMap = colMap || {};
+
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+    if (!updatedMap[key]) {
+      updatedMap[key] = ensureColumnExists(sheet, tabName, key);
+    }
+  }
+
+  return buildColumnMap(sheet, tabName);
 }
 
 function writeFinalNoticeMetadata(sheet, rowIndex, colMap, meta) {
@@ -6486,7 +6511,11 @@ function diagnosticSendTestRow() {
     if (warnConfirm !== ui.Button.YES) return;
   }
 
-  var openToken = getOpenTrackingBaseUrl() ? generateOpenTrackingToken() : "";
+  var trackingEnabled = !!getOpenTrackingBaseUrl();
+  if (trackingEnabled) {
+    colMap = ensureOpenTrackingColumns(sheet, tabName, colMap);
+  }
+  var openToken = trackingEnabled ? generateOpenTrackingToken() : "";
   var emailContent = buildEmailContent(
     remarks,
     clientName,
