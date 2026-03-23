@@ -2956,6 +2956,17 @@ function sendReminderEmailsByTriggerType(triggerType) {
 function sendReminderEmail(data) {
   const subjectPrefix = data.subjectPrefix ? data.subjectPrefix + " " : "";
   const subject = `${subjectPrefix}Reminder: ${data.clientName} - ${data.serviceType || "Project"}`;
+  const escapeHtml = (value) =>
+    String(value === null || value === undefined ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  const formatTimingMessage = (remainingDays) =>
+    remainingDays < 0
+      ? `Overdue by ${Math.abs(remainingDays)} day${Math.abs(remainingDays) === 1 ? "" : "s"}`
+      : `${remainingDays} day${remainingDays === 1 ? "" : "s"} remaining`;
 
   let body = `Dear Team,\n\n`;
   body += `This is an automated reminder regarding the following project:\n\n`;
@@ -2970,39 +2981,129 @@ function sendReminderEmail(data) {
   if (data.deadlines && data.deadlines.length) {
     body += `Deadlines:\n`;
     data.deadlines.forEach((deadline) => {
-      const message =
-        deadline.remainingDays < 0
-          ? `OVERDUE by ${Math.abs(deadline.remainingDays)} days`
-          : `${deadline.remainingDays} days remaining`;
-      body += `- ${deadline.label}: ${message}\n`;
+      body += `- ${deadline.label}: ${formatTimingMessage(deadline.remainingDays)}\n`;
     });
   }
 
   if (data.revisit && data.revisit.remainingDays !== null) {
-    const revisitMessage =
-      data.revisit.remainingDays < 0
-        ? `OVERDUE by ${Math.abs(data.revisit.remainingDays)} days`
-        : `${data.revisit.remainingDays} days remaining`;
+    const revisitMessage = formatTimingMessage(data.revisit.remainingDays);
     body += `\nRevisit:\n- Date: ${formatDate(data.revisit.date)}\n- Status: ${data.revisit.status || "Open"}\n- Timing: ${revisitMessage}\n`;
     if (data.revisit.notes) {
       body += `- Notes: ${data.revisit.notes}\n`;
     }
   }
 
-  if (data.remarks) {
-    body += `\nRemarks:\n${data.remarks}\n`;
-  }
-
   body += `\nPlease take appropriate action to ensure compliance.\n\n`;
   body += `---\n`;
-  body += `CAR Special Projects Monitoring System\n`;
+  body += `Projects Monitoring System\n`;
   body += `This is an automated message. Please do not reply directly to this email.`;
+
+  const reminderItemsHtml = data.reminders
+    .map(
+      (reminder) =>
+        `<li style="margin:0 0 8px 0;">${escapeHtml(reminder)}</li>`,
+    )
+    .join("");
+  const deadlineItemsHtml =
+    data.deadlines && data.deadlines.length
+      ? data.deadlines
+          .map((deadline) => {
+            const statusColor = deadline.remainingDays < 0 ? "#b91c1c" : "#1d4ed8";
+            return `<tr>
+              <td style="padding:10px 0;border-bottom:1px solid #dbeafe;color:#0f172a;font-size:14px;">${escapeHtml(deadline.label)}</td>
+              <td style="padding:10px 0;border-bottom:1px solid #dbeafe;color:${statusColor};font-size:14px;font-weight:600;text-align:right;">${escapeHtml(formatTimingMessage(deadline.remainingDays))}</td>
+            </tr>`;
+          })
+          .join("")
+      : "";
+  const metaRows = [
+    { label: "Client", value: data.clientName },
+    { label: "Service", value: data.serviceType || "N/A" },
+    { label: "Sheet", value: data.sheetName },
+  ];
+  if (data.rowNumber) {
+    metaRows.push({ label: "Row", value: data.rowNumber });
+  }
+  const metaHtml = metaRows
+    .map(
+      (item) => `<tr>
+        <td style="padding:6px 0;color:#475569;font-size:13px;width:88px;">${escapeHtml(item.label)}</td>
+        <td style="padding:6px 0;color:#0f172a;font-size:13px;font-weight:600;">${escapeHtml(item.value)}</td>
+      </tr>`,
+    )
+    .join("");
+  const revisitHtml =
+    data.revisit && data.revisit.remainingDays !== null
+      ? `<div style="margin-top:20px;padding:18px;border:1px solid #dbeafe;border-radius:12px;background:#f8fbff;">
+          <div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#2563eb;margin-bottom:10px;">Revisit</div>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;">
+            <tr>
+              <td style="padding:5px 0;color:#475569;font-size:13px;width:88px;">Date</td>
+              <td style="padding:5px 0;color:#0f172a;font-size:13px;font-weight:600;">${escapeHtml(formatDate(data.revisit.date))}</td>
+            </tr>
+            <tr>
+              <td style="padding:5px 0;color:#475569;font-size:13px;">Status</td>
+              <td style="padding:5px 0;color:#0f172a;font-size:13px;font-weight:600;">${escapeHtml(data.revisit.status || "Open")}</td>
+            </tr>
+            <tr>
+              <td style="padding:5px 0;color:#475569;font-size:13px;">Timing</td>
+              <td style="padding:5px 0;color:#1d4ed8;font-size:13px;font-weight:600;">${escapeHtml(formatTimingMessage(data.revisit.remainingDays))}</td>
+            </tr>
+            ${
+              data.revisit.notes
+                ? `<tr>
+                    <td style="padding:5px 0;color:#475569;font-size:13px;">Notes</td>
+                    <td style="padding:5px 0;color:#0f172a;font-size:13px;">${escapeHtml(data.revisit.notes)}</td>
+                  </tr>`
+                : ""
+            }
+          </table>
+        </div>`
+      : "";
+  const htmlBody = `<!DOCTYPE html>
+<html>
+  <body style="margin:0;padding:24px;background:#eff6ff;font-family:Arial,sans-serif;color:#0f172a;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:640px;margin:0 auto;border-collapse:collapse;">
+      <tr>
+        <td style="padding:0;">
+          <div style="background:#ffffff;border:1px solid #dbeafe;border-radius:18px;overflow:hidden;">
+            <div style="padding:24px 28px;background:#1d4ed8;color:#ffffff;">
+              <div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.9;">Projects Monitoring System</div>
+              <div style="margin-top:8px;font-size:24px;font-weight:700;line-height:1.3;">Reminder Notice</div>
+              <div style="margin-top:8px;font-size:14px;line-height:1.6;color:#dbeafe;">Please review the project details below and take the needed action.</div>
+            </div>
+            <div style="padding:24px 28px;">
+              <div style="padding:18px;border:1px solid #dbeafe;border-radius:12px;background:#f8fbff;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;">${metaHtml}</table>
+              </div>
+              <div style="margin-top:20px;">
+                <div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#2563eb;margin-bottom:10px;">Reminder</div>
+                <ul style="margin:0;padding-left:20px;color:#0f172a;font-size:14px;line-height:1.6;">${reminderItemsHtml}</ul>
+              </div>
+              ${
+                deadlineItemsHtml
+                  ? `<div style="margin-top:20px;">
+                      <div style="font-size:13px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;color:#2563eb;margin-bottom:10px;">Deadlines</div>
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;">${deadlineItemsHtml}</table>
+                    </div>`
+                  : ""
+              }
+              ${revisitHtml}
+              <div style="margin-top:24px;font-size:14px;line-height:1.6;color:#334155;">This is an automated reminder. Please do not reply directly to this email.</div>
+            </div>
+          </div>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
 
   const mailOptions = {
     to: data.recipients.join(","),
     subject: subject,
     body: body,
-    name: "CAR Monitoring System",
+    htmlBody: htmlBody,
+    name: "Projects Monitoring System",
   };
 
   MailApp.sendEmail(mailOptions);
@@ -3053,7 +3154,6 @@ function testReminderForOneRow() {
       deadlines: payload.data.deadlines,
       sheetName: payload.data.sheetName,
       rowNumber: payload.data.rowNumber,
-      remarks: payload.data.remarks,
       revisit: payload.data.revisit,
       subjectPrefix: "[TEST ROW]",
     });
@@ -3103,8 +3203,6 @@ function sendSampleReminderEmail() {
       ],
       sheetName: "Settings Test",
       rowNumber: null,
-      remarks:
-        "This is a sample email from 6.3 Send Test Email to a Chosen Address.",
       subjectPrefix: "[TEST]",
       includeNotificationEmails: false,
     });
