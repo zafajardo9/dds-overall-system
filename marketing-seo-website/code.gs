@@ -10,6 +10,8 @@ const HEADERS = {
     'host',
     'search_console_property',
     'ga4_property_id',
+    'indexnow_key',
+    'indexnow_key_url',
     'default_date_range_days',
     'last_refresh_at',
     'last_refresh_status',
@@ -58,6 +60,7 @@ const CRAWL_MAX_DEPTH = 2;
 const AUDIT_BATCH_SIZE = 20;
 const SEARCH_CONSOLE_ROW_LIMIT = 25000;
 const GA4_ROW_LIMIT = 100000;
+const INDEXNOW_ENDPOINT = 'https://api.indexnow.org/IndexNow';
 
 function onOpen() {
   ensureRequiredSheets_();
@@ -66,6 +69,8 @@ function onOpen() {
     .addItem('Setup Website', 'setupWebsite')
     .addItem('Refresh Website', 'refreshWebsite')
     .addItem('Refresh Website With Date Range', 'refreshWebsiteWithDateRange')
+    .addItem('Check Google Connections', 'checkGoogleConnections')
+    .addItem('Submit to IndexNow', 'submitToIndexNow')
     .addSeparator()
     .addItem('View Logs', 'viewLogs')
     .addToUi();
@@ -86,12 +91,22 @@ function setupWebsite() {
 
   const normalizedWebsiteUrl = normalizeWebsiteUrl_(websiteUrl);
   const host = getHost_(normalizedWebsiteUrl);
+  const searchConsoleProperty = promptForOptionalText_(
+    'Search Console Property',
+    'Optional: enter the Search Console property.\nExamples:\nhttps://www.example.com/\nsc-domain:example.com\n\nLeave blank to skip for now.'
+  );
+  const ga4PropertyId = promptForOptionalText_(
+    'GA4 Property ID',
+    'Optional: enter the numeric GA4 property ID.\nExample: 123456789\n\nLeave blank to skip for now.'
+  );
 
   const configRecord = {
     website_url: normalizedWebsiteUrl,
     host: host,
-    search_console_property: '',
-    ga4_property_id: '',
+    search_console_property: normalizeSearchConsoleProperty_(searchConsoleProperty),
+    ga4_property_id: String(ga4PropertyId || '').trim(),
+    indexnow_key: '',
+    indexnow_key_url: '',
     default_date_range_days: String(DEFAULT_DATE_RANGE_DAYS),
     last_refresh_at: '',
     last_refresh_status: '',
@@ -101,7 +116,7 @@ function setupWebsite() {
 
   ui.alert(
     'Website Saved',
-    'The website was saved. You can now run "Refresh Website" for audit data. Search Console and GA4 can be added later in the Config tab.',
+    'The website was saved. You can now run "Refresh Website" for audit data. Search Console and GA4 can still be updated later in the Config tab.',
     ui.ButtonSet.OK
   );
 }
@@ -118,6 +133,133 @@ function refreshWebsiteWithDateRange() {
     promptForDateRange: true,
     actionName: 'refresh_website_with_date_range',
   });
+}
+
+function checkGoogleConnections() {
+  ensureRequiredSheets_();
+
+  const ui = SpreadsheetApp.getUi();
+  const configs = getConfigRecords_();
+  if (!configs.length) {
+    ui.alert('No websites are configured yet. Run "Setup Website" first.');
+    return;
+  }
+
+  const selectedConfig = selectWebsiteConfig_(configs);
+  if (!selectedConfig) {
+    return;
+  }
+
+  const dateRange = getDateRange_(7);
+  const refreshAt = formatDateTime_(new Date());
+  const searchConsole = fetchOptionalSearchConsoleMetrics_(
+    selectedConfig,
+    dateRange.startDate,
+    dateRange.endDate
+  );
+  const ga4 = fetchOptionalGa4Metrics_(
+    selectedConfig.ga4_property_id,
+    dateRange.startDate,
+    dateRange.endDate
+  );
+
+  const status = searchConsole.included || ga4.included ? 'SUCCESS' : 'WARNING';
+  const message =
+    'Search Console: ' +
+    searchConsole.statusMessage +
+    '\nGA4: ' +
+    ga4.statusMessage;
+
+  appendLogRow_({
+    timestamp: refreshAt,
+    website_url: selectedConfig.website_url,
+    action: 'check_google_connections',
+    status: status,
+    pages_discovered: 0,
+    pages_written: 0,
+    message: truncateText_(message.replace(/\n/g, ' '), 500),
+  });
+
+  ui.alert(
+    'Google Connection Check',
+    'Website: ' +
+      selectedConfig.website_url +
+      '\n\nSearch Console: ' +
+      searchConsole.statusMessage +
+      '\n\nGA4: ' +
+      ga4.statusMessage,
+    ui.ButtonSet.OK
+  );
+}
+
+function submitToIndexNow() {
+  ensureRequiredSheets_();
+
+  const ui = SpreadsheetApp.getUi();
+  const configs = getConfigRecords_();
+  if (!configs.length) {
+    ui.alert('No websites are configured yet. Run "Setup Website" first.');
+    return;
+  }
+
+  const selectedConfig = selectWebsiteConfig_(configs);
+  if (!selectedConfig) {
+    return;
+  }
+
+  const refreshAt = formatDateTime_(new Date());
+
+  try {
+    const pageUrls = getPageUrlsForWebsite_(selectedConfig.website_url);
+    if (!pageUrls.length) {
+      throw new Error('No pages were found in the Pages tab for ' + selectedConfig.website_url + '. Run "Refresh Website" first.');
+    }
+
+    const verification = verifyIndexNowConfiguration_(selectedConfig);
+    const responseCode = submitUrlsToIndexNow_(
+      selectedConfig.website_url,
+      verification.indexnowKey,
+      verification.indexnowKeyUrl,
+      pageUrls
+    );
+    const message =
+      'IndexNow submission accepted for ' +
+      pageUrls.length +
+      ' URLs using the shared endpoint. This notifies IndexNow-supported engines and does not guarantee Google rankings.';
+
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: selectedConfig.website_url,
+      action: 'submit_to_indexnow',
+      status: 'SUCCESS',
+      pages_discovered: pageUrls.length,
+      pages_written: pageUrls.length,
+      message: message + ' HTTP ' + responseCode + '.',
+    });
+
+    ui.alert(
+      'IndexNow Submitted',
+      message,
+      ui.ButtonSet.OK
+    );
+  } catch (error) {
+    const failureMessage = truncateText_(error && error.message ? error.message : String(error), 500);
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: selectedConfig.website_url,
+      action: 'submit_to_indexnow',
+      status: 'FAILED',
+      pages_discovered: 0,
+      pages_written: 0,
+      message: failureMessage,
+    });
+
+    ui.alert(
+      'IndexNow Submission Failed',
+      failureMessage,
+      ui.ButtonSet.OK
+    );
+  }
 }
 
 function viewLogs() {
@@ -749,6 +891,87 @@ function appendLogRow_(logRecord) {
   applySheetFormatting_(sheet, HEADERS.LOGS.length);
 }
 
+function getPageUrlsForWebsite_(websiteUrl) {
+  const sheet = getOrCreateSheet_(SHEET_NAMES.PAGES, HEADERS.PAGES);
+  const data = getSheetValues_(sheet);
+  const pageUrlIndex = HEADERS.PAGES.indexOf('page_url');
+
+  return data.rows
+    .filter(function(row) {
+      return row[0] === websiteUrl && String(row[pageUrlIndex] || '').trim();
+    })
+    .map(function(row) {
+      return normalizePageUrl_(row[pageUrlIndex]);
+    });
+}
+
+function verifyIndexNowConfiguration_(config) {
+  const indexnowKey = String(config.indexnow_key || '').trim();
+  const indexnowKeyUrl = String(config.indexnow_key_url || '').trim();
+
+  if (!indexnowKey) {
+    throw new Error('IndexNow key is missing. Add it in the Config tab for ' + config.website_url + '.');
+  }
+
+  if (!indexnowKeyUrl) {
+    throw new Error('IndexNow key URL is missing. Add it in the Config tab for ' + config.website_url + '.');
+  }
+
+  let response;
+  try {
+    response = fetchWithRetry_(indexnowKeyUrl, {
+      method: 'get',
+      muteHttpExceptions: true,
+      followRedirects: true,
+    });
+  } catch (error) {
+    throw new Error('IndexNow key file could not be reached at ' + indexnowKeyUrl + '.');
+  }
+
+  if (!isSuccessfulResponse_(response.getResponseCode())) {
+    throw new Error(
+      'IndexNow key file returned HTTP ' +
+        response.getResponseCode() +
+        ' at ' +
+        indexnowKeyUrl +
+        '.'
+    );
+  }
+
+  const remoteKey = String(response.getContentText() || '').trim();
+  if (remoteKey !== indexnowKey) {
+    throw new Error(
+      'IndexNow key mismatch. The hosted key file content does not match the key saved in Config.'
+    );
+  }
+
+  return {
+    indexnowKey: indexnowKey,
+    indexnowKeyUrl: indexnowKeyUrl,
+  };
+}
+
+function submitUrlsToIndexNow_(hostUrl, key, keyUrl, urlList) {
+  const payload = {
+    host: getHost_(hostUrl),
+    key: key,
+    keyLocation: keyUrl,
+    urlList: urlList,
+  };
+  const response = fetchWithRetry_(INDEXNOW_ENDPOINT, {
+    method: 'post',
+    contentType: 'application/json',
+    muteHttpExceptions: true,
+    payload: JSON.stringify(payload),
+  });
+
+  if (!isSuccessfulResponse_(response.getResponseCode())) {
+    throw buildApiError_(INDEXNOW_ENDPOINT, response);
+  }
+
+  return response.getResponseCode();
+}
+
 function getConfigRecords_() {
   const sheet = getOrCreateSheet_(SHEET_NAMES.CONFIG, HEADERS.CONFIG);
   const data = getSheetValues_(sheet);
@@ -1060,6 +1283,20 @@ function promptForText_(title, message) {
   }
 
   return value;
+}
+
+function promptForOptionalText_(title, message) {
+  const response = SpreadsheetApp.getUi().prompt(
+    title,
+    message,
+    SpreadsheetApp.getUi().ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() !== SpreadsheetApp.getUi().Button.OK) {
+    return '';
+  }
+
+  return String(response.getResponseText() || '').trim();
 }
 
 function promptForDateRangeDays_(defaultValue) {
