@@ -2,6 +2,7 @@ const SHEET_NAMES = {
   PAGES: 'Pages',
   CONFIG: 'Config',
   LOGS: 'Logs',
+  AI_META_DESCRIPTIONS: 'AI Meta Descriptions',
 };
 
 const GOOGLE_INSPECTION_COLUMNS = [
@@ -61,6 +62,20 @@ const HEADERS = {
     'pages_written',
     'message',
   ],
+  AI_META_DESCRIPTIONS: [
+    'website_url',
+    'host',
+    'page_url',
+    'page_path',
+    'existing_meta_description',
+    'existing_char_count',
+    'length_status',
+    'ai_recommended_meta_description',
+    'ai_char_count',
+    'recommendation_status',
+    'ai_error_message',
+    'generated_at',
+  ],
 };
 
 const DEFAULT_DATE_RANGE_DAYS = 28;
@@ -74,6 +89,15 @@ const SEARCH_CONSOLE_ROW_LIMIT = 25000;
 const GA4_ROW_LIMIT = 100000;
 const INDEXNOW_ENDPOINT = 'https://api.indexnow.org/IndexNow';
 const URL_INSPECTION_ENDPOINT = 'https://searchconsole.googleapis.com/v1/urlInspection/index:inspect';
+const GEMINI_API_KEY_PROPERTY = 'GEMINI_API_KEY';
+const GEMINI_MODEL_PROPERTY = 'GEMINI_MODEL';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/';
+const META_DESCRIPTION_MAX_LENGTH = 150;
+const GEMINI_MODEL_CACHE_TTL_SECONDS = 21600;
+const GEMINI_RESPONSE_CACHE_TTL_SECONDS = 21600;
+const GEMINI_MAX_REQUESTS_PER_RUN = 10;
+const GEMINI_REQUEST_DELAY_MS = 600;
 const SOURCE_METHOD_PRIORITY = {
   sitemap: 2,
   crawl: 1,
@@ -89,6 +113,14 @@ function onOpen() {
     .addItem('Check Google Connections', 'checkGoogleConnections')
     .addItem('Check Google Index Status', 'checkGoogleIndexStatus')
     .addItem('Submit to IndexNow', 'submitToIndexNow')
+    .addSeparator()
+    .addItem('Setup Gemini AI', 'setupGeminiAi')
+    .addItem('Select Gemini AI Model', 'selectGeminiAiModel')
+    .addItem('Check Gemini AI Connection', 'checkGeminiAiConnection')
+    .addItem('Generate AI Meta Descriptions', 'generateAiMetaDescriptions')
+    .addItem('View AI Meta Descriptions', 'viewAiMetaDescriptions')
+    .addSeparator()
+    .addItem('Clear All Sheet Data', 'clearAllSheetData')
     .addSeparator()
     .addItem('View Logs', 'viewLogs')
     .addToUi();
@@ -343,6 +375,299 @@ function submitToIndexNow() {
       ui.ButtonSet.OK
     );
   }
+}
+
+function setupGeminiAi() {
+  ensureRequiredSheets_();
+
+  const ui = SpreadsheetApp.getUi();
+  const enteredApiKey = promptForText_(
+    'Gemini API Key',
+    'Enter your Gemini API key.\nIt will be saved once for this Apps Script project and reused for AI meta description generation.'
+  );
+
+  if (!enteredApiKey) {
+    return;
+  }
+
+  const apiKey = String(enteredApiKey || '').trim();
+  const refreshAt = formatDateTime_(new Date());
+
+  try {
+    validateGeminiApiKey_(apiKey);
+    PropertiesService.getScriptProperties().setProperty(GEMINI_API_KEY_PROPERTY, apiKey);
+    const selectedModel = promptForGeminiModelSelection_(apiKey, getGeminiModel_()) || DEFAULT_GEMINI_MODEL;
+    saveGeminiModel_(selectedModel);
+
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: '',
+      action: 'setup_gemini_ai',
+      status: 'SUCCESS',
+      pages_discovered: 0,
+      pages_written: 0,
+      message: 'Gemini API key was saved and validated successfully. Model: ' + selectedModel + '.',
+    });
+
+    ui.alert(
+      'Gemini AI Connected',
+      'The Gemini API key was saved successfully.\nSelected model: ' +
+        selectedModel +
+        '\n\nYou can now run "Generate AI Meta Descriptions".',
+      ui.ButtonSet.OK
+    );
+  } catch (error) {
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: '',
+      action: 'setup_gemini_ai',
+      status: 'FAILED',
+      pages_discovered: 0,
+      pages_written: 0,
+      message: truncateText_(error && error.message ? error.message : String(error), 500),
+    });
+
+    ui.alert(
+      'Gemini AI Setup Failed',
+      truncateText_(error && error.message ? error.message : String(error), 500),
+      ui.ButtonSet.OK
+    );
+  }
+}
+
+function selectGeminiAiModel() {
+  ensureRequiredSheets_();
+
+  const ui = SpreadsheetApp.getUi();
+  const apiKey = getGeminiApiKey_();
+  if (!apiKey) {
+    ui.alert('Gemini AI is not configured yet. Run "Setup Gemini AI" first.');
+    return;
+  }
+
+  const refreshAt = formatDateTime_(new Date());
+
+  try {
+    const selectedModel = promptForGeminiModelSelection_(apiKey, getGeminiModel_());
+    if (!selectedModel) {
+      return;
+    }
+
+    saveGeminiModel_(selectedModel);
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: '',
+      action: 'select_gemini_ai_model',
+      status: 'SUCCESS',
+      pages_discovered: 0,
+      pages_written: 0,
+      message: 'Gemini model updated to ' + selectedModel + '.',
+    });
+
+    ui.alert(
+      'Gemini Model Updated',
+      'The saved Gemini model is now: ' + selectedModel,
+      ui.ButtonSet.OK
+    );
+  } catch (error) {
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: '',
+      action: 'select_gemini_ai_model',
+      status: 'FAILED',
+      pages_discovered: 0,
+      pages_written: 0,
+      message: truncateText_(error && error.message ? error.message : String(error), 500),
+    });
+
+    ui.alert(
+      'Gemini Model Selection Failed',
+      truncateText_(error && error.message ? error.message : String(error), 500),
+      ui.ButtonSet.OK
+    );
+  }
+}
+
+function checkGeminiAiConnection() {
+  ensureRequiredSheets_();
+
+  const ui = SpreadsheetApp.getUi();
+  const refreshAt = formatDateTime_(new Date());
+  const apiKey = getGeminiApiKey_();
+
+  if (!apiKey) {
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: '',
+      action: 'check_gemini_ai_connection',
+      status: 'WARNING',
+      pages_discovered: 0,
+      pages_written: 0,
+      message: 'Gemini API key is not configured.',
+    });
+
+    ui.alert(
+      'Gemini AI Not Configured',
+      'No Gemini API key is saved yet. Run "Setup Gemini AI" first.',
+      ui.ButtonSet.OK
+    );
+    return;
+  }
+
+  try {
+    validateGeminiApiKey_(apiKey);
+    const selectedModel = getGeminiModel_();
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: '',
+      action: 'check_gemini_ai_connection',
+      status: 'SUCCESS',
+      pages_discovered: 0,
+      pages_written: 0,
+      message: 'Gemini AI connection test succeeded. Model: ' + selectedModel + '.',
+    });
+
+    ui.alert(
+      'Gemini AI Connection Check',
+      'Gemini AI is configured correctly and responded successfully.\nSelected model: ' +
+        selectedModel,
+      ui.ButtonSet.OK
+    );
+  } catch (error) {
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: '',
+      action: 'check_gemini_ai_connection',
+      status: 'FAILED',
+      pages_discovered: 0,
+      pages_written: 0,
+      message: truncateText_(error && error.message ? error.message : String(error), 500),
+    });
+
+    ui.alert(
+      'Gemini AI Connection Failed',
+      truncateText_(error && error.message ? error.message : String(error), 500),
+      ui.ButtonSet.OK
+    );
+  }
+}
+
+function generateAiMetaDescriptions() {
+  ensureRequiredSheets_();
+
+  const ui = SpreadsheetApp.getUi();
+  const configs = getConfigRecords_();
+  if (!configs.length) {
+    ui.alert('No websites are configured yet. Run "Setup Website" first.');
+    return;
+  }
+
+  const apiKey = getGeminiApiKey_();
+  if (!apiKey) {
+    ui.alert('Gemini AI is not configured yet. Run "Setup Gemini AI" first.');
+    return;
+  }
+
+  const selectedConfig = selectWebsiteConfig_(configs);
+  if (!selectedConfig) {
+    return;
+  }
+
+  const refreshAt = formatDateTime_(new Date());
+
+  try {
+    const pageRows = getDetailedPageRowsForWebsite_(selectedConfig.website_url);
+    if (!pageRows.length) {
+      throw new Error('No pages were found in the Pages tab for ' + selectedConfig.website_url + '. Run "Refresh Website" first.');
+    }
+
+    const generationRun = buildAiMetaDescriptionRows_(
+      selectedConfig,
+      pageRows,
+      apiKey,
+      refreshAt
+    );
+
+    writeAiMetaDescriptionRows_(selectedConfig.website_url, generationRun.rows);
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: selectedConfig.website_url,
+      action: 'generate_ai_meta_descriptions',
+      status: generationRun.status,
+      pages_discovered: pageRows.length,
+      pages_written: generationRun.rows.length,
+      message: generationRun.logMessage,
+    });
+
+    ui.alert(
+      'AI Meta Descriptions Generated',
+      generationRun.popupMessage,
+      ui.ButtonSet.OK
+    );
+  } catch (error) {
+    appendLogRow_({
+      timestamp: refreshAt,
+      website_url: selectedConfig.website_url,
+      action: 'generate_ai_meta_descriptions',
+      status: 'FAILED',
+      pages_discovered: 0,
+      pages_written: 0,
+      message: truncateText_(error && error.message ? error.message : String(error), 500),
+    });
+
+    ui.alert(
+      'AI Meta Description Generation Failed',
+      truncateText_(error && error.message ? error.message : String(error), 500),
+      ui.ButtonSet.OK
+    );
+  }
+}
+
+function viewAiMetaDescriptions() {
+  ensureRequiredSheets_();
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(SHEET_NAMES.AI_META_DESCRIPTIONS);
+  spreadsheet.setActiveSheet(sheet);
+}
+
+function clearAllSheetData() {
+  ensureRequiredSheets_();
+
+  const ui = SpreadsheetApp.getUi();
+  const confirmation = ui.alert(
+    'Clear All Sheet Data',
+    'This will clear all cell contents across every sheet in this spreadsheet. Required headers will be restored afterward.\n\nDo you want to continue?',
+    ui.ButtonSet.YES_NO
+  );
+
+  if (confirmation !== ui.Button.YES) {
+    return;
+  }
+
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const refreshAt = formatDateTime_(new Date());
+
+  spreadsheet.getSheets().forEach(function(sheet) {
+    sheet.clearContents();
+  });
+
+  ensureRequiredSheets_();
+
+  appendLogRow_({
+    timestamp: refreshAt,
+    website_url: '',
+    action: 'clear_all_sheet_data',
+    status: 'SUCCESS',
+    pages_discovered: 0,
+    pages_written: 0,
+    message: 'All sheet cell contents were cleared. Required headers were restored.',
+  });
+
+  ui.alert(
+    'Sheet Data Cleared',
+    'All cell contents were cleared across the spreadsheet. The required automation headers have been restored.',
+    ui.ButtonSet.OK
+  );
 }
 
 function viewLogs() {
@@ -1247,6 +1572,28 @@ function writePagesSnapshot_(websiteUrl, rows) {
   applySheetFormatting_(sheet, HEADERS.PAGES.length);
 }
 
+function writeAiMetaDescriptionRows_(websiteUrl, rows) {
+  const sheet = getOrCreateSheet_(SHEET_NAMES.AI_META_DESCRIPTIONS, HEADERS.AI_META_DESCRIPTIONS);
+  const existingData = getSheetValues_(sheet);
+  const retainedRows = existingData.rows.filter(function(row) {
+    return row[0] !== websiteUrl;
+  }).map(function(row) {
+    return normalizeRowLength_(row, HEADERS.AI_META_DESCRIPTIONS.length);
+  });
+  const allRows = retainedRows.concat(rows);
+
+  sheet.clearContents();
+  sheet
+    .getRange(1, 1, 1, HEADERS.AI_META_DESCRIPTIONS.length)
+    .setValues([HEADERS.AI_META_DESCRIPTIONS]);
+  if (allRows.length) {
+    sheet
+      .getRange(2, 1, allRows.length, HEADERS.AI_META_DESCRIPTIONS.length)
+      .setValues(allRows);
+  }
+  applySheetFormatting_(sheet, HEADERS.AI_META_DESCRIPTIONS.length);
+}
+
 function appendLogRow_(logRecord) {
   const sheet = getOrCreateSheet_(SHEET_NAMES.LOGS, HEADERS.LOGS);
   const row = [
@@ -1276,6 +1623,25 @@ function getPageRowsForWebsite_(websiteUrl) {
         website_url: row[0],
         page_url: normalizePageUrl_(row[pageUrlIndex]),
       };
+    });
+}
+
+function getDetailedPageRowsForWebsite_(websiteUrl) {
+  const sheet = getOrCreateSheet_(SHEET_NAMES.PAGES, HEADERS.PAGES);
+  const data = getSheetValues_(sheet);
+  const pageUrlIndex = HEADERS.PAGES.indexOf('page_url');
+
+  return data.rows
+    .map(function(row) {
+      return rowToObject_(HEADERS.PAGES, normalizeRowLength_(row, HEADERS.PAGES.length));
+    })
+    .filter(function(record) {
+      return record.website_url === websiteUrl && String(record.page_url || '').trim();
+    })
+    .sort(function(left, right) {
+      return String(left[HEADERS.PAGES[pageUrlIndex]] || left.page_url || '').localeCompare(
+        String(right[HEADERS.PAGES[pageUrlIndex]] || right.page_url || '')
+      );
     });
 }
 
@@ -1508,6 +1874,429 @@ function ensureRequiredSheets_() {
   getOrCreateSheet_(SHEET_NAMES.PAGES, HEADERS.PAGES);
   getOrCreateSheet_(SHEET_NAMES.CONFIG, HEADERS.CONFIG);
   getOrCreateSheet_(SHEET_NAMES.LOGS, HEADERS.LOGS);
+  getOrCreateSheet_(SHEET_NAMES.AI_META_DESCRIPTIONS, HEADERS.AI_META_DESCRIPTIONS);
+}
+
+function getGeminiApiKey_() {
+  return String(
+    PropertiesService.getScriptProperties().getProperty(GEMINI_API_KEY_PROPERTY) || ''
+  ).trim();
+}
+
+function getGeminiModel_() {
+  return String(
+    PropertiesService.getScriptProperties().getProperty(GEMINI_MODEL_PROPERTY) || DEFAULT_GEMINI_MODEL
+  ).trim();
+}
+
+function saveGeminiModel_(modelId) {
+  PropertiesService.getScriptProperties().setProperty(
+    GEMINI_MODEL_PROPERTY,
+    String(modelId || '').trim() || DEFAULT_GEMINI_MODEL
+  );
+}
+
+function validateGeminiApiKey_(apiKey) {
+  if (!/^AIza/i.test(String(apiKey || '').trim())) {
+    throw new Error(
+      'The value entered does not look like a Gemini API key from Google AI Studio. Gemini API keys usually start with "AIza".'
+    );
+  }
+
+  fetchGeminiModelOptions_(apiKey);
+}
+
+function buildAiMetaDescriptionRows_(config, pageRows, apiKey, generatedAt) {
+  const rows = [];
+  const summary = {
+    ok: 0,
+    generated: 0,
+    failed: 0,
+    skipped: 0,
+  };
+  let geminiRequestsUsed = 0;
+
+  pageRows.forEach(function(pageRow) {
+    const existingMetaDescription = sanitizeSingleLineText_(pageRow.meta_description || '');
+    const existingCharCount = existingMetaDescription.length;
+    const lengthStatus = getMetaDescriptionLengthStatus_(existingMetaDescription);
+    let recommendedMetaDescription = '';
+    let aiCharCount = 0;
+    let recommendationStatus = 'NOT_NEEDED';
+    let aiErrorMessage = '';
+
+    if (lengthStatus === 'OK') {
+      summary.ok += 1;
+    } else {
+      if (geminiRequestsUsed >= GEMINI_MAX_REQUESTS_PER_RUN) {
+        recommendationStatus =
+          'SKIPPED_RATE_LIMIT';
+        aiErrorMessage =
+          'Run limit of ' + GEMINI_MAX_REQUESTS_PER_RUN + ' Gemini requests reached';
+        summary.skipped += 1;
+      } else {
+        try {
+          const generationResult = generateRecommendedMetaDescription_(
+            pageRow,
+            apiKey
+          );
+          recommendedMetaDescription = generationResult.text;
+          aiCharCount = recommendedMetaDescription.length;
+          recommendationStatus = 'GENERATED';
+          summary.generated += 1;
+          if (generationResult.usedApiCall) {
+            geminiRequestsUsed += 1;
+            Utilities.sleep(GEMINI_REQUEST_DELAY_MS);
+          }
+        } catch (error) {
+          recommendationStatus = 'FAILED';
+          aiErrorMessage = truncateText_(
+            error && error.message ? error.message : String(error),
+            200
+          );
+          summary.failed += 1;
+          geminiRequestsUsed += 1;
+          Utilities.sleep(GEMINI_REQUEST_DELAY_MS);
+        }
+      }
+    }
+
+    rows.push([
+      config.website_url,
+      config.host,
+      normalizePageUrl_(pageRow.page_url),
+      pageRow.page_path || extractPathFromUrl_(pageRow.page_url),
+      existingMetaDescription,
+      existingCharCount,
+      lengthStatus,
+      recommendedMetaDescription,
+      aiCharCount,
+      recommendationStatus,
+      aiErrorMessage,
+      generatedAt,
+    ]);
+  });
+
+  const status = summary.failed ? 'WARNING' : 'SUCCESS';
+  const finalStatus = summary.failed || summary.skipped ? 'WARNING' : status;
+  const logMessage =
+    'Processed ' +
+    pageRows.length +
+    ' pages. OK: ' +
+    summary.ok +
+    ', AI generated: ' +
+    summary.generated +
+    ', failed: ' +
+    summary.failed +
+    ', skipped: ' +
+    summary.skipped +
+    ', Gemini requests used: ' +
+    geminiRequestsUsed +
+    '.';
+  const popupMessage =
+    'Website: ' +
+    config.website_url +
+    '\n\nRows checked: ' +
+    pageRows.length +
+    '\nAlready OK: ' +
+    summary.ok +
+    '\nAI generated: ' +
+    summary.generated +
+    '\nFailed: ' +
+    summary.failed +
+    '\nSkipped for this run: ' +
+    summary.skipped +
+    '\nGemini requests used: ' +
+    geminiRequestsUsed +
+    ' / ' +
+    GEMINI_MAX_REQUESTS_PER_RUN +
+    '\n\nReview the recommendation_status and ai_error_message columns in the "AI Meta Descriptions" tab for any failures or skipped rows.';
+
+  return {
+    rows: rows,
+    status: finalStatus,
+    logMessage: logMessage,
+    popupMessage: popupMessage,
+  };
+}
+
+function getMetaDescriptionLengthStatus_(metaDescription) {
+  if (!metaDescription) {
+    return 'EMPTY';
+  }
+
+  if (metaDescription.length > META_DESCRIPTION_MAX_LENGTH) {
+    return 'TOO_LONG';
+  }
+
+  return 'OK';
+}
+
+function generateRecommendedMetaDescription_(pageRow, apiKey) {
+  const prompt = buildGeminiMetaDescriptionPrompt_(pageRow);
+  const cacheKey = buildGeminiResponseCacheKey_(getGeminiModel_(), prompt);
+  const cache = CacheService.getScriptCache();
+  const cachedResponse = cache.get(cacheKey);
+  if (cachedResponse) {
+    return {
+      text: sanitizeGeminiMetaDescription_(cachedResponse),
+      usedApiCall: false,
+    };
+  }
+
+  const responseText = callGeminiGenerateText_(apiKey, prompt);
+  const sanitizedText = sanitizeGeminiMetaDescription_(responseText);
+
+  if (!sanitizedText) {
+    throw new Error('Gemini returned an empty recommendation.');
+  }
+
+  cache.put(cacheKey, sanitizedText, GEMINI_RESPONSE_CACHE_TTL_SECONDS);
+  return {
+    text: sanitizedText,
+    usedApiCall: true,
+  };
+}
+
+function buildGeminiMetaDescriptionPrompt_(pageRow) {
+  return [
+    'You are rewriting a website meta description for SEO.',
+    'Create exactly one meta description for the page using only the information provided below.',
+    'Do not invent facts, offers, pricing, guarantees, locations, features, or claims that are not supported by the page URL, title, H1, or current meta description.',
+    'Preserve the page intent and topic. If the source details are limited, stay generic and conservative.',
+    'Return plain text only.',
+    'Do not use quotation marks, bullets, labels, markdown, emojis, or multiple options.',
+    'Write natural, clickworthy copy suitable for a search result snippet.',
+    'Keep the final meta description at or below ' + META_DESCRIPTION_MAX_LENGTH + ' characters.',
+    '',
+    'Page URL: ' + valueOrEmpty_(pageRow.page_url),
+    'Page path: ' + valueOrEmpty_(pageRow.page_path),
+    'Title: ' + valueOrEmpty_(pageRow.title),
+    'H1: ' + valueOrEmpty_(pageRow.h1),
+    'Current meta description: ' + valueOrEmpty_(pageRow.meta_description),
+  ].join('\n');
+}
+
+function callGeminiGenerateText_(apiKey, prompt) {
+  const modelId = getGeminiModel_();
+  const url =
+    GEMINI_API_BASE_URL +
+    encodeURIComponent(modelId) +
+    ':generateContent?key=' +
+    encodeURIComponent(apiKey);
+  const response = fetchWithRetry_(url, {
+    method: 'post',
+    contentType: 'application/json',
+    muteHttpExceptions: true,
+    payload: JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: prompt,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 80,
+      },
+    }),
+  });
+
+  if (!isSuccessfulResponse_(response.getResponseCode())) {
+    throw buildApiError_(url, response);
+  }
+
+  return extractGeminiTextFromResponse_(JSON.parse(response.getContentText() || '{}'));
+}
+
+function promptForGeminiModelSelection_(apiKey, currentModel) {
+  const ui = SpreadsheetApp.getUi();
+  const modelOptions = fetchGeminiModelOptions_(apiKey);
+  if (!modelOptions.length) {
+    throw new Error('No Gemini models with generateContent support were returned for this API key.');
+  }
+
+  const exampleList = modelOptions
+    .slice(0, 20)
+    .map(function(option) {
+      return option.modelId;
+    })
+    .join('\n');
+  const recommendedModel = findRecommendedGeminiModel_(modelOptions, currentModel);
+  const response = ui.prompt(
+    'Select Gemini Model',
+    'Enter the exact Gemini model ID to save.\nCurrent: ' +
+      valueOrEmpty_(currentModel) +
+      '\nRecommended: ' +
+      recommendedModel +
+      '\n\nAvailable model IDs:\n' +
+      exampleList +
+      (modelOptions.length > 20 ? '\n...' : ''),
+    ui.ButtonSet.OK_CANCEL
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    return '';
+  }
+
+  const requestedModel = String(response.getResponseText() || '').trim() || recommendedModel;
+  const matchingModel = modelOptions.find(function(option) {
+    return option.modelId === requestedModel;
+  });
+
+  if (!matchingModel) {
+    throw new Error(
+      'The selected model "' + requestedModel + '" was not found in the Gemini models list for this API key.'
+    );
+  }
+
+  return matchingModel.modelId;
+}
+
+function fetchGeminiModelOptions_(apiKey) {
+  const cacheKey = buildGeminiModelCacheKey_(apiKey);
+  const cache = CacheService.getScriptCache();
+  const cachedValue = cache.get(cacheKey);
+  if (cachedValue) {
+    return JSON.parse(cachedValue);
+  }
+
+  const modelsById = {};
+  let pageToken = '';
+
+  do {
+    const url =
+      'https://generativelanguage.googleapis.com/v1beta/models?key=' +
+      encodeURIComponent(apiKey) +
+      (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
+    const response = fetchWithRetry_(url, {
+      method: 'get',
+      muteHttpExceptions: true,
+    });
+
+    if (!isSuccessfulResponse_(response.getResponseCode())) {
+      throw buildApiError_(url, response);
+    }
+
+    const responseBody = JSON.parse(response.getContentText() || '{}');
+    const models = responseBody.models || [];
+    models.forEach(function(model) {
+      const supportedMethods = model.supportedGenerationMethods || [];
+      const modelName = String(model.name || '').trim();
+      const modelId = extractGeminiModelId_(modelName);
+      if (!modelId || supportedMethods.indexOf('generateContent') === -1) {
+        return;
+      }
+
+      if (!modelsById[modelId]) {
+        modelsById[modelId] = {
+          modelId: modelId,
+          name: modelName,
+          displayName: String(model.displayName || modelId),
+          description: String(model.description || '').trim(),
+        };
+      }
+    });
+
+    pageToken = String(responseBody.nextPageToken || '').trim();
+  } while (pageToken);
+
+  const modelOptions = Object.keys(modelsById)
+    .sort()
+    .map(function(modelId) {
+      return modelsById[modelId];
+    });
+
+  cache.put(cacheKey, JSON.stringify(modelOptions), GEMINI_MODEL_CACHE_TTL_SECONDS);
+  return modelOptions;
+}
+
+function findRecommendedGeminiModel_(modelOptions, currentModel) {
+  const preferredModels = [
+    currentModel,
+    DEFAULT_GEMINI_MODEL,
+    'gemini-2.0-flash',
+  ].filter(Boolean);
+
+  for (let i = 0; i < preferredModels.length; i += 1) {
+    const candidate = preferredModels[i];
+    const match = modelOptions.find(function(option) {
+      return option.modelId === candidate;
+    });
+    if (match) {
+      return match.modelId;
+    }
+  }
+
+  return modelOptions[0].modelId;
+}
+
+function extractGeminiModelId_(modelName) {
+  const normalizedName = String(modelName || '').trim();
+  if (!normalizedName) {
+    return '';
+  }
+
+  return normalizedName.replace(/^models\//i, '').trim();
+}
+
+function buildGeminiModelCacheKey_(apiKey) {
+  return 'gemini_models_' + hashTextForCache_(String(apiKey || '').trim());
+}
+
+function buildGeminiResponseCacheKey_(modelId, prompt) {
+  return 'gemini_meta_' + hashTextForCache_(String(modelId || '') + '|' + String(prompt || ''));
+}
+
+function hashTextForCache_(value) {
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(value || ''),
+    Utilities.Charset.UTF_8
+  );
+  return Utilities.base64EncodeWebSafe(digest).replace(/=+$/g, '');
+}
+
+function extractGeminiTextFromResponse_(responseBody) {
+  const candidates = responseBody.candidates || [];
+  if (!candidates.length) {
+    throw new Error('Gemini returned no candidates.');
+  }
+
+  const firstCandidate = candidates[0] || {};
+  const content = firstCandidate.content || {};
+  const parts = content.parts || [];
+  const text = parts.map(function(part) {
+    return String(part && part.text ? part.text : '');
+  }).join(' ').trim();
+
+  if (!text) {
+    throw new Error('Gemini returned no text content.');
+  }
+
+  return text;
+}
+
+function sanitizeGeminiMetaDescription_(value) {
+  let sanitizedValue = sanitizeSingleLineText_(value)
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+    .replace(/^(meta description|description)\s*:\s*/i, '')
+    .trim();
+
+  if (sanitizedValue.length > META_DESCRIPTION_MAX_LENGTH) {
+    sanitizedValue = sanitizedValue.slice(0, META_DESCRIPTION_MAX_LENGTH).trim();
+  }
+
+  return sanitizedValue;
+}
+
+function sanitizeSingleLineText_(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function getOrCreateSheet_(sheetName, headers) {
