@@ -1,4 +1,4 @@
-// System Version: March 9, 2026 8:08 am
+// System Version: March 30, 2026 8:08 am
 
 var CONFIG = {
   SHEET_NAME: "VISA automation",
@@ -2406,6 +2406,18 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }
 
+function normalizeEmailAddress(value) {
+  var email = String(value || "").trim();
+  if (!email) return "";
+
+  var angleMatch = email.match(/<([^<>]+)>/);
+  if (angleMatch && angleMatch[1]) {
+    email = String(angleMatch[1]).trim();
+  }
+
+  return email.replace(/^[\s"'`<]+|[\s"'`>]+$/g, "").trim();
+}
+
 function normalizeEmailList(value) {
   var rawValues = [];
 
@@ -2421,7 +2433,7 @@ function normalizeEmailList(value) {
   var result = [];
 
   for (var i = 0; i < rawValues.length; i++) {
-    var email = String(rawValues[i] || "").trim();
+    var email = normalizeEmailAddress(rawValues[i]);
     if (!email) continue;
 
     var key = email.toLowerCase();
@@ -3087,6 +3099,7 @@ function runDailyCheck() {
 
       try {
         var sentThisRow = false;
+        var displayName = getSenderDisplayName(senderEmail);
 
         if (shouldSendNotice) {
           var noticeToken = trackingEnabled ? generateOpenTrackingToken() : "";
@@ -3099,25 +3112,21 @@ function runDailyCheck() {
             "notice",
           );
           var noticeSubject = buildStageSubject(baseSubject, "notice");
-          var displayName = getSenderDisplayName(senderEmail);
           var noticeFallbackHtml = buildFallbackLinksHtml(
             attachResult.failedLinks,
           );
           var noticeHtmlBody = noticeFallbackHtml
             ? noticeContent.htmlBody + noticeFallbackHtml
             : noticeContent.htmlBody;
-          var noticeMeta = { threadId: "", messageId: "" };
-          for (var ei = 0; ei < clientEmailList.length; ei++) {
-            var eMeta = sendReminderEmail(
-              clientEmailList[ei],
-              ccEmails,
-              noticeSubject,
-              noticeHtmlBody,
-              attachResult.blobs,
-              displayName,
-            );
-            if (ei === 0) noticeMeta = eMeta;
-          }
+          var noticeSendResult = sendReminderEmails(
+            clientEmailList,
+            ccEmails,
+            noticeSubject,
+            noticeHtmlBody,
+            attachResult.blobs,
+            displayName,
+          );
+          var noticeMeta = noticeSendResult.meta;
 
           colMap = ensureReplyStatusColumn(visaSheet, tabName, colMap);
           writePostSendMetadata(visaSheet, rowIndex, colMap, {
@@ -3160,7 +3169,7 @@ function runDailyCheck() {
             clientName,
             sameDayFinal ? "SENT_NOTICE_FINAL" : "SENT_NOTICE",
             "Email sent to " +
-              clientEmailDisplay +
+              noticeSendResult.success.join(", ") +
               (ccEmails.length > 0
                 ? " (CC: " + ccEmails.join(", ") + ")"
                 : "") +
@@ -3174,6 +3183,14 @@ function runDailyCheck() {
                 ? " | Attachments: " + attachResult.blobs.length
                 : "") +
               (noticeToken ? " | Tracking: enabled" : "") +
+              (noticeSendResult.failed.length > 0
+                ? " | Failed Recipients: " +
+                  noticeSendResult.failed
+                    .map(function (item) {
+                      return item.email + " (" + item.error + ")";
+                    })
+                    .join("; ")
+                : "") +
               (senderEmail ? " | Sender: " + senderEmail : ""),
           );
           sent++;
@@ -3198,18 +3215,15 @@ function runDailyCheck() {
           var finalHtmlBody = finalFallbackHtml
             ? finalContent.htmlBody + finalFallbackHtml
             : finalContent.htmlBody;
-          var finalMeta = { threadId: "", messageId: "" };
-          for (var fi = 0; fi < clientEmailList.length; fi++) {
-            var fMeta = sendReminderEmail(
-              clientEmailList[fi],
-              ccEmails,
-              finalSubject,
-              finalHtmlBody,
-              attachResult.blobs,
-              displayName,
-            );
-            if (fi === 0) finalMeta = fMeta;
-          }
+          var finalSendResult = sendReminderEmails(
+            clientEmailList,
+            ccEmails,
+            finalSubject,
+            finalHtmlBody,
+            attachResult.blobs,
+            displayName,
+          );
+          var finalMeta = finalSendResult.meta;
 
           writeFinalNoticeMetadata(visaSheet, rowIndex, colMap, {
             sentAt: new Date(),
@@ -3243,7 +3257,7 @@ function runDailyCheck() {
             clientName,
             "SENT_FINAL",
             "Email sent to " +
-              clientEmailDisplay +
+              finalSendResult.success.join(", ") +
               (ccEmails.length > 0
                 ? " (CC: " + ccEmails.join(", ") + ")"
                 : "") +
@@ -3256,6 +3270,14 @@ function runDailyCheck() {
                 ? " | Attachments: " + attachResult.blobs.length
                 : "") +
               (finalToken ? " | Tracking: enabled" : "") +
+              (finalSendResult.failed.length > 0
+                ? " | Failed Recipients: " +
+                  finalSendResult.failed
+                    .map(function (item) {
+                      return item.email + " (" + item.error + ")";
+                    })
+                    .join("; ")
+                : "") +
               (senderEmail ? " | Sender: " + senderEmail : ""),
           );
           sent++;
@@ -3939,8 +3961,9 @@ function isProcessableStatus(statusValue) {
 
 function isReplyStatusReplied(replyStatusValue) {
   return (
-    String(replyStatusValue || "").trim().toLowerCase() ===
-    REPLY_STATUS.REPLIED.toLowerCase()
+    String(replyStatusValue || "")
+      .trim()
+      .toLowerCase() === REPLY_STATUS.REPLIED.toLowerCase()
   );
 }
 
@@ -4910,6 +4933,64 @@ function sendReminderEmail(
 
   // Best-effort metadata lookup from Sent mailbox.
   return lookupRecentSentMessageMeta(clientEmail, subject);
+}
+
+function sendReminderEmails(
+  clientEmails,
+  ccEmails,
+  subject,
+  htmlBody,
+  blobItems,
+  senderName,
+) {
+  var recipients = normalizeEmailList(clientEmails);
+  var result = {
+    success: [],
+    failed: [],
+    meta: { threadId: "", messageId: "" },
+  };
+
+  for (var i = 0; i < recipients.length; i++) {
+    var recipient = recipients[i];
+
+    if (!isValidEmail(recipient)) {
+      result.failed.push({
+        email: recipient,
+        error: "Invalid email address format.",
+      });
+      continue;
+    }
+
+    try {
+      var meta = sendReminderEmail(
+        recipient,
+        ccEmails,
+        subject,
+        htmlBody,
+        blobItems,
+        senderName,
+      );
+      if (result.success.length === 0) result.meta = meta;
+      result.success.push(recipient);
+    } catch (e) {
+      result.failed.push({
+        email: recipient,
+        error: e && e.message ? e.message : String(e),
+      });
+    }
+  }
+
+  if (result.success.length === 0 && result.failed.length > 0) {
+    throw new Error(
+      result.failed
+        .map(function (item) {
+          return item.email + " (" + item.error + ")";
+        })
+        .join("; "),
+    );
+  }
+
+  return result;
 }
 
 /**
@@ -5946,7 +6027,12 @@ function recordOpenTrackingEvent(token, mode) {
       }
 
       colMap = ensureReplyMetadataColumns(sheet, tabName, colMap);
-      setCellValueIfColumn(sheet, rowNum, colMap.REPLY_STATUS, REPLY_STATUS.REPLIED);
+      setCellValueIfColumn(
+        sheet,
+        rowNum,
+        colMap.REPLY_STATUS,
+        REPLY_STATUS.REPLIED,
+      );
       if (colMap.REPLIED_AT) {
         var repliedAtCell = sheet.getRange(rowNum, colMap.REPLIED_AT);
         if (!repliedAtCell.getValue()) repliedAtCell.setValue(now);
@@ -6531,18 +6617,15 @@ function diagnosticSendTestRow() {
     var testHtmlBody = testFallbackHtml
       ? emailContent.htmlBody + testFallbackHtml
       : emailContent.htmlBody;
-    var sentMeta = { threadId: "", messageId: "" };
-    for (var ti = 0; ti < clientEmailList.length; ti++) {
-      var tMeta = sendReminderEmail(
-        clientEmailList[ti],
-        ccEmails,
-        subject,
-        testHtmlBody,
-        attachResult.blobs,
-        displayName,
-      );
-      if (ti === 0) sentMeta = tMeta;
-    }
+    var testSendResult = sendReminderEmails(
+      clientEmailList,
+      ccEmails,
+      subject,
+      testHtmlBody,
+      attachResult.blobs,
+      displayName,
+    );
+    var sentMeta = testSendResult.meta;
     setStaffEmail(sheet, rowNum, colMap.STAFF_EMAIL, senderEmail);
     colMap = ensureReplyStatusColumn(sheet, tabName, colMap);
     writePostSendMetadata(sheet, rowNum, colMap, {
@@ -6571,15 +6654,31 @@ function diagnosticSendTestRow() {
       "Test email sent by No. " +
         rowNo +
         " | To: " +
-        clientEmailList.join(", ") +
+        testSendResult.success.join(", ") +
         (ccEmails.length > 0 ? " | CC: " + ccEmails.join(", ") : "") +
+        (testSendResult.failed.length > 0
+          ? " | Failed Recipients: " +
+            testSendResult.failed
+              .map(function (item) {
+                return item.email + " (" + item.error + ")";
+              })
+              .join("; ")
+          : "") +
         " | Body: " +
         emailContent.source,
     );
     ui.alert(
       "Test email sent successfully to " +
-        clientEmailList.join(", ") +
+        testSendResult.success.join(", ") +
         "." +
+        (testSendResult.failed.length > 0
+          ? "\n\nFailed recipients:\n" +
+            testSendResult.failed
+              .map(function (item) {
+                return item.email + " - " + item.error;
+              })
+              .join("\n")
+          : "") +
         "\n\nBody source: " +
         emailContent.source +
         (senderEmail
