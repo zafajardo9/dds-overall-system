@@ -445,7 +445,11 @@ function promptForSheetSelection(title, promptText, currentSelection) {
   const allSheets = getEligibleAutomationSheets();
 
   if (allSheets.length === 0) {
-    ui.alert(title, "No eligible data tabs were found in this spreadsheet.", ui.ButtonSet.OK);
+    ui.alert(
+      title,
+      "No eligible data tabs were found in this spreadsheet.",
+      ui.ButtonSet.OK,
+    );
     return null;
   }
 
@@ -610,11 +614,7 @@ function getHeaderAliases() {
       "Seller Donor",
       "Seller Doner",
     ],
-    [cfg.HEADERS.BUYER_DONEE]: [
-      "Buyer / Donee",
-      "Buyer/Donee",
-      "Buyer Donee",
-    ],
+    [cfg.HEADERS.BUYER_DONEE]: ["Buyer / Donee", "Buyer/Donee", "Buyer Donee"],
     [cfg.HEADERS.SERVICE_TYPE]: ["Services", "Service", "Service Type"],
     [cfg.HEADERS.NOTARY_DATE]: [
       "NOTARY DATE OF DOCUMENT",
@@ -623,10 +623,7 @@ function getHeaderAliases() {
     ],
     [cfg.HEADERS.STATUS]: ["Current Status", "Status", "Project Status"],
     [cfg.HEADERS.REMARKS]: ["Remarks", "Notes"],
-    [cfg.HEADERS.STAFF_EMAIL]: [
-      "Staff Email",
-      "Assignee Email",
-    ],
+    [cfg.HEADERS.STAFF_EMAIL]: ["Staff Email", "Assignee Email"],
     [cfg.HEADERS.CLIENT_EMAIL]: [
       "Email Address",
       "Client Email",
@@ -658,8 +655,8 @@ function normalizeHeaderName(header) {
 
 function headerContainsPhrase(header, phrases) {
   const normalizedHeader = normalizeHeaderName(header);
-  return (phrases || []).some((phrase) =>
-    normalizedHeader.indexOf(normalizeHeaderName(phrase)) >= 0,
+  return (phrases || []).some(
+    (phrase) => normalizedHeader.indexOf(normalizeHeaderName(phrase)) >= 0,
   );
 }
 
@@ -728,8 +725,8 @@ function isProjectSheetName(sheetName) {
     cfg.HEADERS.NOTARY_DATE,
   );
   const hasDueDate = headers.some((header) => isDueDateHeader(header));
-  const hasReminder = headers.some(
-    (header) => headerContainsPhrase(header, ["reminder"]),
+  const hasReminder = headers.some((header) =>
+    headerContainsPhrase(header, ["reminder"]),
   );
 
   return hasNotaryDate || hasDueDate || hasReminder;
@@ -748,12 +745,16 @@ function getDeadlineGroups(sheet) {
       remainingCol: null,
       statusCol: null,
       reminderCol: null,
+      sentCol: null,
     };
 
     for (let j = i + 1; j < headers.length; j++) {
       if (isDueDateHeader(headers[j])) break;
 
-      if (!group.remainingCol && headerContainsPhrase(headers[j], ["remaining days"])) {
+      if (
+        !group.remainingCol &&
+        headerContainsPhrase(headers[j], ["remaining days"])
+      ) {
         group.remainingCol = j + 1;
         continue;
       }
@@ -763,8 +764,16 @@ function getDeadlineGroups(sheet) {
         continue;
       }
 
-      if (!group.reminderCol && headerContainsPhrase(headers[j], ["reminder"])) {
+      if (
+        !group.reminderCol &&
+        headerContainsPhrase(headers[j], ["reminder"])
+      ) {
         group.reminderCol = j + 1;
+        continue;
+      }
+
+      if (!group.sentCol && headerContainsPhrase(headers[j], ["sent"])) {
+        group.sentCol = j + 1;
       }
     }
 
@@ -818,12 +827,15 @@ function getExpectedGroupTypesForSheet(sheetName) {
 function describeConfiguredGroupsForSheet(sheetName) {
   const groups = [];
   if (getConfiguredDstCgtTabs().includes(sheetName)) groups.push("DST/CGT");
-  if (getConfiguredTransferTaxTabs().includes(sheetName)) groups.push("Transfer Tax");
+  if (getConfiguredTransferTaxTabs().includes(sheetName))
+    groups.push("Transfer Tax");
   return groups;
 }
 
 function getSendableGroupTypesForSheet(sheet) {
-  const available = getFormulaDrivenDeadlineGroups(sheet).map((group) => group.type);
+  const available = getFormulaDrivenDeadlineGroups(sheet).map(
+    (group) => group.type,
+  );
   const expected = getExpectedGroupTypesForSheet(sheet.getName());
   const allowed = expected.filter((type) => available.includes(type));
   if (
@@ -946,7 +958,11 @@ function applyFormulasToConfiguredSheets() {
   );
 
   if (!sheetNames.length) {
-    ui.alert("Apply Formulas", "No configured tabs found. Run Quick Setup first.", ui.ButtonSet.OK);
+    ui.alert(
+      "Apply Formulas",
+      "No configured tabs found. Run Quick Setup first.",
+      ui.ButtonSet.OK,
+    );
     return;
   }
 
@@ -997,10 +1013,18 @@ function applyFormulasToConfiguredSheets() {
       });
       if (!formulas) return;
 
-      sheet.getRange(startRow, group.dueDateCol).setFormula(formulas.dueFormula);
-      sheet.getRange(startRow, group.remainingCol).setFormula(formulas.remainingFormula);
-      sheet.getRange(startRow, group.statusCol).setFormula(formulas.statusFormula);
-      sheet.getRange(startRow, group.reminderCol).setFormula(formulas.reminderFormula);
+      sheet
+        .getRange(startRow, group.dueDateCol)
+        .setFormula(formulas.dueFormula);
+      sheet
+        .getRange(startRow, group.remainingCol)
+        .setFormula(formulas.remainingFormula);
+      sheet
+        .getRange(startRow, group.statusCol)
+        .setFormula(formulas.statusFormula);
+      sheet
+        .getRange(startRow, group.reminderCol)
+        .setFormula(formulas.reminderFormula);
       applied++;
     });
   });
@@ -1154,12 +1178,20 @@ function formatDayCountLabel(dayCount) {
   return `${count} day${count === 1 ? "" : "s"}`;
 }
 
-function buildFallbackReminderMessage(group, clientName, remainingValue, statusValue, dueDateValue) {
+function buildFallbackReminderMessage(
+  group,
+  clientName,
+  remainingValue,
+  statusValue,
+  dueDateValue,
+) {
   const normalizedStatus = normalizeReminderStatus(statusValue);
   const deadlineName = getDeadlineGroupDisplayName(group);
   const subjectLabel = `${deadlineName} for ${clientName || "this record"}`;
   const remainingDays =
-    remainingValue === "" || remainingValue === null || isNaN(Number(remainingValue))
+    remainingValue === "" ||
+    remainingValue === null ||
+    isNaN(Number(remainingValue))
       ? null
       : Number(remainingValue);
 
@@ -1230,7 +1262,8 @@ function showSettings() {
   msg += `  Transfer Tax Tabs: ${transferTabs.length ? transferTabs.join(", ") : "(none selected)"}\n`;
   msg += "\nEMAIL RULE\n";
   msg += "  Recipient Column: Staff Email\n";
-  msg += "  Send Condition: The due-date cell for a deadline group is today's date, and the item is not marked as paid/completed\n";
+  msg +=
+    "  Send Condition: The due-date cell for a deadline group is today's date, and the item is not marked as paid/completed\n";
   msg += "  Duplicate Rule: One email per row/group/day\n";
   msg += "\nROW SAFEGUARDS\n";
   msg += `  Header Row: ${cfg.HEADER_ROW || "(auto-detect)"}\n`;
@@ -1241,7 +1274,8 @@ function showSettings() {
   msg += `  Installed Triggers: ${automation.count}\n`;
   msg += "\n— Use Quick Setup to select tabs and verify formulas\n";
   msg += "— Use Run Validation to review missing groups or formulas\n";
-  msg += "— Use Send Reminder Emails to send reminders from existing sheet formulas";
+  msg +=
+    "— Use Send Reminder Emails to send reminders from existing sheet formulas";
 
   ui.alert("Settings", msg, ui.ButtonSet.OK);
 }
@@ -1425,9 +1459,7 @@ Enter the row number (e.g. 3), or leave blank to use auto-detection:`,
   scriptProps.setProperty("HEADER_ROW", String(num));
   invalidateConfigCache();
   logActivity("SYSTEM", "Header Row", `Set to row ${num}`);
-  ui.alert(
-    `Header row set to row ${num}.`,
-  );
+  ui.alert(`Header row set to row ${num}.`);
 }
 
 function setDataStartRow() {
@@ -1466,9 +1498,7 @@ Enter the row number (e.g. 5), or leave blank to use auto-detection:`,
   scriptProps.setProperty("DATA_START_ROW", String(num));
   invalidateConfigCache();
   logActivity("SYSTEM", "Data Start Row", `Set to row ${num}`);
-  ui.alert(
-    `Data start row set to row ${num}.`,
-  );
+  ui.alert(`Data start row set to row ${num}.`);
 }
 
 // ============================================================================
@@ -1572,18 +1602,25 @@ function showAbout() {
   let msg = "CAR Monitoring — About\n";
   msg += "=".repeat(30) + "\n\n";
   msg += "How it works:\n";
-  msg += "- The sheet formulas calculate the due dates, remaining days, status, and reminder text for each row.\n";
-  msg += "- When a user enters or updates the source dates, the row formulas update automatically.\n";
-  msg += "- The Apps Script does not calculate those deadlines itself; it only reads the row values already produced by the sheet.\n";
-  msg += "- Every day, Automatic Sending scans the configured tabs and checks the Due Date columns.\n";
-  msg += "- If a row's DST, CGT / DOD, Transfer Tax, or Estate Tax due date is today, the script can send the reminder email for that row.\n";
-  msg += "- It sends to the Staff Email, skips rows already marked paid/completed, and avoids duplicate same-day sends.\n";
+  msg +=
+    "- The sheet formulas calculate the due dates, remaining days, status, and reminder text for each row.\n";
+  msg +=
+    "- When a user enters or updates the source dates, the row formulas update automatically.\n";
+  msg +=
+    "- The Apps Script does not calculate those deadlines itself; it only reads the row values already produced by the sheet.\n";
+  msg +=
+    "- Every day, Automatic Sending scans the configured tabs and checks the Due Date columns.\n";
+  msg +=
+    "- If a row's DST, CGT / DOD, Transfer Tax, or Estate Tax due date is today, the script can send the reminder email for that row.\n";
+  msg +=
+    "- It sends to the Staff Email, skips rows already marked paid/completed, and avoids duplicate same-day sends.\n";
   msg += "\nPer tab group:\n";
   msg += `- DST / CGT Tabs: ${dstCgtTabs.length ? dstCgtTabs.join(", ") : "(none selected)"}\n`;
   msg += "  Expected groups: DST Due Date and CGT / DOD Due Date\n";
   msg += `- Transfer Tax Tabs: ${transferTabs.length ? transferTabs.join(", ") : "(none selected)"}\n`;
   msg += "  Expected group: Transfer Tax Due Date\n";
-  msg += "  Estate Tax is also included automatically on these tabs when detected.\n";
+  msg +=
+    "  Estate Tax is also included automatically on these tabs when detected.\n";
   msg += "\nAutomatic Sending:\n";
   msg += "- If enabled, the daily trigger runs this scan automatically.\n";
   msg += "- If disabled, you can still use Send Reminder Emails manually.\n";
@@ -1599,7 +1636,10 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu("CAR Monitoring")
     .addItem("Quick Setup", "quickSetup")
-    .addItem("Apply Formulas to Configured Sheets", "applyFormulasToConfiguredSheets")
+    .addItem(
+      "Apply Formulas to Configured Sheets",
+      "applyFormulasToConfiguredSheets",
+    )
     .addItem("Run Validation", "showValidationReport")
     .addItem("Send Reminder Emails", "sendReminderEmails")
     .addItem("About", "showAbout")
@@ -1610,7 +1650,10 @@ function onOpen() {
         .addItem("Start Automatic Sending", "startAutomaticSending")
         .addItem("Set Automatic Sending Time", "configureDailyAutomationTime")
         .addItem("Stop Automatic Sending", "stopAutomaticSending")
-        .addItem("Check Automatic Sending Status", "showAutomaticSendingStatus"),
+        .addItem(
+          "Check Automatic Sending Status",
+          "showAutomaticSendingStatus",
+        ),
     )
     .addSubMenu(
       ui
@@ -1643,7 +1686,9 @@ function detectHeaderRow(sheet) {
   const maxScan = Math.min(10, sheet.getLastRow());
   if (maxScan < 1) return 1;
 
-  const scanData = sheet.getRange(1, 1, maxScan, sheet.getLastColumn()).getValues();
+  const scanData = sheet
+    .getRange(1, 1, maxScan, sheet.getLastColumn())
+    .getValues();
   let bestRow = 1;
   let bestScore = -1;
 
@@ -1670,8 +1715,9 @@ function detectHeaderRow(sheet) {
       ]),
     ).length;
     const isLikelyMergedLabel =
-      sheet.getRange(rowNumber, 1, 1, Math.max(1, sheet.getLastColumn())).isPartOfMerge() &&
-      nonEmpty <= 2;
+      sheet
+        .getRange(rowNumber, 1, 1, Math.max(1, sheet.getLastColumn()))
+        .isPartOfMerge() && nonEmpty <= 2;
     const score = headerHits * 10 + nonEmpty - (isLikelyMergedLabel ? 100 : 0);
 
     if (score > bestScore) {
@@ -1708,8 +1754,14 @@ function getDataStartRow(sheet) {
     if (isLikelyMergedLabel) continue;
     if (hasTrackedFormula) return row;
 
-    const staffEmailCol = findHeaderIndexByName(getHeaders(sheet), getConfig().HEADERS.STAFF_EMAIL);
-    const companyCol = findHeaderIndexByName(getHeaders(sheet), getConfig().HEADERS.CLIENT_NAME);
+    const staffEmailCol = findHeaderIndexByName(
+      getHeaders(sheet),
+      getConfig().HEADERS.STAFF_EMAIL,
+    );
+    const companyCol = findHeaderIndexByName(
+      getHeaders(sheet),
+      getConfig().HEADERS.CLIENT_NAME,
+    );
     if (
       (staffEmailCol && values[staffEmailCol - 1] !== "") ||
       (companyCol && values[companyCol - 1] !== "")
@@ -1971,7 +2023,9 @@ function getOpenRevisitInfo(sheet, row) {
   return {
     date: revisitDate,
     status: status,
-    notes: revisitNotesCol ? sheet.getRange(row, revisitNotesCol).getValue() : "",
+    notes: revisitNotesCol
+      ? sheet.getRange(row, revisitNotesCol).getValue()
+      : "",
     remainingDays: calculateRemainingDays(revisitDate),
   };
 }
@@ -1992,10 +2046,14 @@ function validateSystem() {
   const notes = [];
   const dstCgtTabs = getConfiguredDstCgtTabs();
   const transferTabs = getConfiguredTransferTaxTabs();
-  const allConfiguredTabs = Array.from(new Set(dstCgtTabs.concat(transferTabs)));
+  const allConfiguredTabs = Array.from(
+    new Set(dstCgtTabs.concat(transferTabs)),
+  );
 
   notes.push(`Spreadsheet: ${ss.getName()}`);
-  notes.push(`Automatic sending time: ${getAutomaticSendingStatus().timeLabel}`);
+  notes.push(
+    `Automatic sending time: ${getAutomaticSendingStatus().timeLabel}`,
+  );
   notes.push("Recipient column: Staff Email");
 
   if (dstCgtTabs.length === 0 && transferTabs.length === 0) {
@@ -2040,11 +2098,18 @@ function validateSystem() {
         ),
       );
     } else {
-      const rowRange = sheet.getRange(dataStartRow, 1, 1, Math.max(1, sheet.getLastColumn()));
+      const rowRange = sheet.getRange(
+        dataStartRow,
+        1,
+        1,
+        Math.max(1, sheet.getLastColumn()),
+      );
       const rowValues = rowRange.getValues()[0];
       const rowFormulas = rowRange.getFormulas()[0];
       const hasAnyFormula = rowFormulas.some(Boolean);
-      const hasAnyData = rowValues.some((value) => value !== "" && value !== null);
+      const hasAnyData = rowValues.some(
+        (value) => value !== "" && value !== null,
+      );
       if (rowRange.isPartOfMerge() && !hasAnyFormula) {
         warnings.push(
           createValidationEntry(
@@ -2071,7 +2136,10 @@ function validateSystem() {
       );
     }
 
-    const staffEmailCol = findHeaderIndexByName(headers, getConfig().HEADERS.STAFF_EMAIL);
+    const staffEmailCol = findHeaderIndexByName(
+      headers,
+      getConfig().HEADERS.STAFF_EMAIL,
+    );
     if (!staffEmailCol) {
       issues.push(
         createValidationEntry(
@@ -2668,10 +2736,19 @@ function ensureReminderSendLogSheet() {
 }
 
 function getTodayKey() {
-  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  return Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone(),
+    "yyyy-MM-dd",
+  );
 }
 
-function wasReminderSentToday(sheetName, rowNumber, deadlineGroup, recipientLogKey) {
+function wasReminderSentToday(
+  sheetName,
+  rowNumber,
+  deadlineGroup,
+  recipientLogKey,
+) {
   const sheet = ensureReminderSendLogSheet();
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return false;
@@ -2679,9 +2756,14 @@ function wasReminderSentToday(sheetName, rowNumber, deadlineGroup, recipientLogK
   const today = getTodayKey();
   const data = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
   return data.some((entry) => {
-    const dateKey = entry[0] instanceof Date
-      ? Utilities.formatDate(entry[0], Session.getScriptTimeZone(), "yyyy-MM-dd")
-      : entry[0].toString();
+    const dateKey =
+      entry[0] instanceof Date
+        ? Utilities.formatDate(
+            entry[0],
+            Session.getScriptTimeZone(),
+            "yyyy-MM-dd",
+          )
+        : entry[0].toString();
     return (
       dateKey === today &&
       entry[1] === sheetName &&
@@ -2693,7 +2775,14 @@ function wasReminderSentToday(sheetName, rowNumber, deadlineGroup, recipientLogK
   });
 }
 
-function logReminderSend(sheetName, rowNumber, deadlineGroup, recipientLogKey, triggerType, status) {
+function logReminderSend(
+  sheetName,
+  rowNumber,
+  deadlineGroup,
+  recipientLogKey,
+  triggerType,
+  status,
+) {
   ensureReminderSendLogSheet().appendRow([
     new Date(),
     sheetName,
@@ -2712,6 +2801,55 @@ function markReminderCellAsSent(sheet, rowNumber, columnNumber) {
     .setBackground("#93c47d")
     .setFontColor("#ffffff")
     .setFontWeight("bold");
+}
+
+function getSentColumnName(groupType) {
+  var map = {};
+  map[DEADLINE_GROUP_TYPES.DST] = "DST Sent";
+  map[DEADLINE_GROUP_TYPES.CGT_DOD] = "CGT / DOD Sent";
+  map[DEADLINE_GROUP_TYPES.TRANSFER_TAX] = "Transfer Tax Sent";
+  map[DEADLINE_GROUP_TYPES.ESTATE_TAX] = "Estate Tax Sent";
+  return map[groupType] || null;
+}
+
+function hasSentMarker(sheet, rowNumber, group) {
+  if (!group || !group.sentCol) return false;
+  const val = sheet.getRange(rowNumber, group.sentCol).getValue();
+  return val !== null && val !== undefined && val.toString().trim() !== "";
+}
+
+function ensureSentColumn(sheet, group) {
+  const colName = getSentColumnName(group.type);
+  if (!colName) return null;
+
+  const headers = getHeaders(sheet);
+  const existingIdx = headers.findIndex(function (h) {
+    return h.toString().trim().toLowerCase() === colName.toLowerCase();
+  });
+  if (existingIdx >= 0) return existingIdx + 1;
+
+  const insertAfter = group.reminderCol || sheet.getLastColumn();
+  sheet.insertColumnAfter(insertAfter);
+  const headerRow = getHeaderRow(sheet);
+  const newCol = insertAfter + 1;
+  sheet.getRange(headerRow, newCol).setValue(colName).setFontWeight("bold");
+  return newCol;
+}
+
+function writeSentMarker(sheet, rowNumber, group) {
+  if (!group || !group.type) return;
+  let sentCol = group.sentCol;
+  if (!sentCol) {
+    sentCol = ensureSentColumn(sheet, group);
+    if (!sentCol) return;
+    group.sentCol = sentCol;
+  }
+  const dateStr = Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone(),
+    "yyyy-MM-dd",
+  );
+  sheet.getRange(rowNumber, sentCol).setValue("Sent " + dateStr);
 }
 
 function logActivity(clientName, action, detail) {
@@ -2826,8 +2964,14 @@ function buildRecipientLogKey(toRecipients, ccRecipients) {
 
 function getPartyDetailsForReminder(headers, row) {
   const cfg = getConfig();
-  const sellerDonorIndex = findHeaderIndexByName(headers, cfg.HEADERS.SELLER_DONOR);
-  const buyerDoneeIndex = findHeaderIndexByName(headers, cfg.HEADERS.BUYER_DONEE);
+  const sellerDonorIndex = findHeaderIndexByName(
+    headers,
+    cfg.HEADERS.SELLER_DONOR,
+  );
+  const buyerDoneeIndex = findHeaderIndexByName(
+    headers,
+    cfg.HEADERS.BUYER_DONEE,
+  );
 
   return {
     sellerDonor: sellerDonorIndex ? row[sellerDonorIndex - 1] : "",
@@ -2853,18 +2997,39 @@ function getReminderEmailPayloadForRow(sheet, rowNumber, options) {
   const row = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
   const deadlineGroups = getDeadlineGroups(sheet);
 
-  const genericReminderIndex = findHeaderIndexByName(headers, cfg.HEADERS.REMINDER);
-  const serviceTypeIndex = findHeaderIndexByName(headers, cfg.HEADERS.SERVICE_TYPE);
-  const clientNameIndex = findHeaderIndexByName(headers, cfg.HEADERS.CLIENT_NAME);
-  const staffEmailIndex = findHeaderIndexByName(headers, cfg.HEADERS.STAFF_EMAIL);
-  const clientEmailIndex = findHeaderIndexByName(headers, cfg.HEADERS.CLIENT_EMAIL);
+  const genericReminderIndex = findHeaderIndexByName(
+    headers,
+    cfg.HEADERS.REMINDER,
+  );
+  const serviceTypeIndex = findHeaderIndexByName(
+    headers,
+    cfg.HEADERS.SERVICE_TYPE,
+  );
+  const clientNameIndex = findHeaderIndexByName(
+    headers,
+    cfg.HEADERS.CLIENT_NAME,
+  );
+  const staffEmailIndex = findHeaderIndexByName(
+    headers,
+    cfg.HEADERS.STAFF_EMAIL,
+  );
+  const clientEmailIndex = findHeaderIndexByName(
+    headers,
+    cfg.HEADERS.CLIENT_EMAIL,
+  );
   const remarksIndex = findHeaderIndexByName(headers, cfg.HEADERS.REMARKS);
-  const revisitDateIndex = findHeaderIndexByName(headers, cfg.HEADERS.REVISIT_DATE);
+  const revisitDateIndex = findHeaderIndexByName(
+    headers,
+    cfg.HEADERS.REVISIT_DATE,
+  );
   const revisitStatusIndex = findHeaderIndexByName(
     headers,
     cfg.HEADERS.REVISIT_STATUS,
   );
-  const revisitNotesIndex = findHeaderIndexByName(headers, cfg.HEADERS.REVISIT_NOTES);
+  const revisitNotesIndex = findHeaderIndexByName(
+    headers,
+    cfg.HEADERS.REVISIT_NOTES,
+  );
 
   const reminders = [];
   const deadlineSummaries = [];
@@ -3029,31 +3194,52 @@ function sendReminderEmailsByTriggerType(triggerType) {
       const ccRecipients = buildReminderCcRecipients(true, recipients);
 
       if (!recipients.length) {
-        skipped.push(`${sheetName} row ${actualRow}: missing valid Staff Email`);
+        skipped.push(
+          `${sheetName} row ${actualRow}: missing valid Staff Email`,
+        );
         return;
       }
 
       deadlineGroups.forEach((group) => {
-        const remainingValue = group.remainingCol ? row[group.remainingCol - 1] : "";
+        const remainingValue = group.remainingCol
+          ? row[group.remainingCol - 1]
+          : "";
         const resolvedReminder = resolveReminderMessageForGroup(
           group,
           row,
           clientName || "Unknown Client",
         );
         const shouldSend =
-          shouldSendReminderForDueDate(group, row) &&
-          resolvedReminder;
+          shouldSendReminderForDueDate(group, row) && resolvedReminder;
 
         if (!shouldSend) return;
 
         const recipientLogKey = buildRecipientLogKey(recipients, ccRecipients);
-        if (wasReminderSentToday(sheetName, actualRow, group.type, recipientLogKey)) {
-          skipped.push(`${sheetName} row ${actualRow}: ${group.type} already sent today`);
+        if (
+          wasReminderSentToday(
+            sheetName,
+            actualRow,
+            group.type,
+            recipientLogKey,
+          )
+        ) {
+          skipped.push(
+            `${sheetName} row ${actualRow}: ${group.type} already sent today`,
+          );
+          return;
+        }
+
+        if (hasSentMarker(sheet, actualRow, group)) {
+          skipped.push(
+            `${sheetName} row ${actualRow}: ${group.type} already sent (permanent marker set)`,
+          );
           return;
         }
 
         const remainingDays =
-          remainingValue === "" || remainingValue === null ? null : Number(remainingValue);
+          remainingValue === "" || remainingValue === null
+            ? null
+            : Number(remainingValue);
         const deadlineSummary =
           remainingDays === null || isNaN(remainingDays)
             ? []
@@ -3089,6 +3275,7 @@ function sendReminderEmailsByTriggerType(triggerType) {
             `${group.type} to ${recipientLogKey} (${triggerType})`,
           );
           markReminderCellAsSent(sheet, actualRow, group.reminderCol);
+          writeSentMarker(sheet, actualRow, group);
         } catch (e) {
           logReminderSend(
             sheetName,
@@ -3098,8 +3285,14 @@ function sendReminderEmailsByTriggerType(triggerType) {
             triggerType,
             "FAILED",
           );
-          skipped.push(`${sheetName} row ${actualRow}: ${group.type} failed (${e.message})`);
-          logActivity(clientName || "Unknown Client", "Email Failed", e.message);
+          skipped.push(
+            `${sheetName} row ${actualRow}: ${group.type} failed (${e.message})`,
+          );
+          logActivity(
+            clientName || "Unknown Client",
+            "Email Failed",
+            e.message,
+          );
         }
       });
     });
@@ -3109,9 +3302,16 @@ function sendReminderEmailsByTriggerType(triggerType) {
     skipped.length ? `\n\nSkipped / Issues:\n- ${skipped.join("\n- ")}` : ""
   }`;
   if (interactive) {
-    SpreadsheetApp.getActive().toast(`Sent ${emailCount} reminder email(s)`, "Emails Sent");
+    SpreadsheetApp.getActive().toast(
+      `Sent ${emailCount} reminder email(s)`,
+      "Emails Sent",
+    );
   }
-  logActivity("SYSTEM", "Reminder Sending Complete", summary.replace(/\n/g, " | "));
+  logActivity(
+    "SYSTEM",
+    "Reminder Sending Complete",
+    summary.replace(/\n/g, " | "),
+  );
   if (interactive) {
     SpreadsheetApp.getUi().alert(
       "Send Reminder Emails",
@@ -3126,7 +3326,8 @@ function composeReminderEmail(data) {
   const subject = `${subjectPrefix}Reminder: ${data.clientName} - ${data.serviceType || "Project"}`;
   const toRecipients = data.recipients || [];
   const ccRecipients =
-    data.ccRecipients || buildReminderCcRecipients(data.includeNotificationEmails, toRecipients);
+    data.ccRecipients ||
+    buildReminderCcRecipients(data.includeNotificationEmails, toRecipients);
   const recipientLogKey = buildRecipientLogKey(toRecipients, ccRecipients);
   const escapeHtml = (value) =>
     String(value === null || value === undefined ? "" : value)
@@ -3192,7 +3393,8 @@ function composeReminderEmail(data) {
     data.deadlines && data.deadlines.length
       ? data.deadlines
           .map((deadline) => {
-            const statusColor = deadline.remainingDays < 0 ? "#b91c1c" : "#1d4ed8";
+            const statusColor =
+              deadline.remainingDays < 0 ? "#b91c1c" : "#1d4ed8";
             return `<tr>
               <td style="padding:10px 0;border-bottom:1px solid #dbeafe;color:#0f172a;font-size:14px;">${escapeHtml(deadline.label)}</td>
               <td style="padding:10px 0;border-bottom:1px solid #dbeafe;color:${statusColor};font-size:14px;font-weight:600;text-align:right;">${escapeHtml(formatTimingMessage(deadline.remainingDays))}</td>
@@ -3370,7 +3572,9 @@ function getReminderEmailTesterSelection(rowNumberInput) {
   if (context.error) return context;
 
   const parsedRow = parseInt(
-    rowNumberInput === null || rowNumberInput === undefined || rowNumberInput === ""
+    rowNumberInput === null ||
+      rowNumberInput === undefined ||
+      rowNumberInput === ""
       ? context.activeRow
       : rowNumberInput,
     10,
@@ -3431,9 +3635,13 @@ function buildReminderEmailTesterState(testEmail, rowNumberInput) {
   }
 
   const normalizedEmail = (testEmail || "").toString().trim().toLowerCase();
-  const payload = getReminderEmailPayloadForRow(selection.sheet, selection.rowNumber, {
-    requireRecipients: false,
-  });
+  const payload = getReminderEmailPayloadForRow(
+    selection.sheet,
+    selection.rowNumber,
+    {
+      requireRecipients: false,
+    },
+  );
   if (!payload.data) {
     return {
       error: payload.error,
@@ -3445,7 +3653,10 @@ function buildReminderEmailTesterState(testEmail, rowNumberInput) {
   }
 
   const actualRecipients = payload.data.recipients || [];
-  const automationCcRecipients = buildReminderCcRecipients(true, actualRecipients);
+  const automationCcRecipients = buildReminderCcRecipients(
+    true,
+    actualRecipients,
+  );
   const previewRecipients = isValidEmailAddress(normalizedEmail)
     ? [normalizedEmail]
     : actualRecipients;
@@ -3505,7 +3716,9 @@ function openReminderEmailTester() {
 function sendReminderEmailTesterMessage(testEmail, rowNumberInput) {
   const normalizedEmail = (testEmail || "").toString().trim().toLowerCase();
   if (!isValidEmailAddress(normalizedEmail)) {
-    throw new Error("Enter a valid email address before sending the test email.");
+    throw new Error(
+      "Enter a valid email address before sending the test email.",
+    );
   }
 
   const selection = getReminderEmailTesterSelection(rowNumberInput);
@@ -3513,9 +3726,13 @@ function sendReminderEmailTesterMessage(testEmail, rowNumberInput) {
     throw new Error(selection.error);
   }
 
-  const payload = getReminderEmailPayloadForRow(selection.sheet, selection.rowNumber, {
-    requireRecipients: false,
-  });
+  const payload = getReminderEmailPayloadForRow(
+    selection.sheet,
+    selection.rowNumber,
+    {
+      requireRecipients: false,
+    },
+  );
   if (!payload.data) {
     throw new Error(payload.error);
   }
